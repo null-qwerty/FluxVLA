@@ -356,35 +356,45 @@ def extract_frames_ffmpeg(video_path,
                           output_dir,
                           image_max_side=448,
                           jpeg_quality=90):
-    """Extract exactly the requested frames with one ffmpeg call."""
-    ffmpeg = shutil.which('ffmpeg')
+    """Extract exactly the requested frames with per-index seeks.
+
+    Each frame is fetched with its own fast input seek (-ss before -i, one
+    output frame). This avoids decoding the whole 1080p episode for a handful
+    of frames, which dominated conversion time for long EgoDex videos. Falls
+    back to the caller on any error so the imageio path stays available.
+    """
+    ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
-        raise RuntimeError('ffmpeg is not available.')
-    pattern = os.path.join(output_dir, 'frame_%05d.jpg')
+        raise RuntimeError("ffmpeg is not available.")
+    fps = probe_video(video_path)[0]
+    pattern = os.path.join(output_dir, "frame_%05d.jpg")
     for stale in glob.glob(pattern):
         os.remove(stale)
-    select = '+'.join('eq(n\\,%d)' % index for index in indices)
-    filters = "select='%s'" % select
-    if image_max_side > 0:
-        filters += (",scale=w='min(iw,%d)':h='min(ih,%d)':"
-                    'force_original_aspect_ratio=decrease' %
-                    (image_max_side, image_max_side))
-    command = [
-        ffmpeg, '-hide_banner', '-loglevel', 'error', '-i', video_path, '-vf',
-        filters, '-vsync', '0', '-q:v',
-        str(jpeg_quality), pattern
-    ]
-    result = subprocess.run(
-        command, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError('ffmpeg failed for %s: %s' %
-                           (video_path, result.stderr.strip()))
-    frames = sorted(glob.glob(pattern))
-    if len(frames) != len(indices):
-        raise RuntimeError('ffmpeg returned %d/%d frames for %s' %
-                           (len(frames), len(indices), video_path))
+    frames = []
+    for order, index in enumerate(indices):
+        target = os.path.join(output_dir, "frame_%05d.jpg" % order)
+        timestamp = max(0.0, float(index) / float(fps)) if fps else 0.0
+        filters = []
+        if image_max_side > 0:
+            filters.append(
+                "scale=w=min(iw,%d):h=min(ih,%d):"
+                "force_original_aspect_ratio=decrease"
+                % (image_max_side, image_max_side))
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error",
+            "-ss", "%.6f" % timestamp, "-i", video_path,
+            "-frames:v", "1", "-q:v", str(jpeg_quality),
+        ]
+        if filters:
+            command.extend(["-vf", ",".join(filters)])
+        command.append(target)
+        result = subprocess.run(command, capture_output=True, text=True,
+                                check=False)
+        if result.returncode != 0 or not os.path.isfile(target):
+            raise RuntimeError("ffmpeg failed for %s: %s"
+                               % (video_path, result.stderr.strip()))
+        frames.append(target)
     return frames
-
 
 def extract_frames_imageio(video_path,
                            indices,
