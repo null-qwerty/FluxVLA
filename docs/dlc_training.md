@@ -121,3 +121,30 @@ NUM_GPUS=8 bash scripts/eval_robocasa_manager.sh "$CONFIG" "$CKPT"
 - TASK 2 是「ego 先改 VLM，再在 RoboCasa 上 LoRA」的串行方案。
 - 三者步数预算一致（40k updates、global 256），可直接比较 24×50 的成功率；
   另建议补一条 `LLaVA-665K` 混训对照，用于区分「混训本身」与「ego 内容」的贡献。
+## 9. 训练镜像
+
+DLC 自定义任务请使用下面这个镜像（已构建并推送，2026-11-12）：
+
+```text
+limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.1
+```
+
+- digest: `sha256:13edd7140be508e4c04d8de72bd5daead6de0cd1118b7f4b280b23635d5f13bf`
+- 内容：ubuntu24.04 / Python 3.10.22 / torch 2.8.0+cu128 / robosuite 1.5.1 /
+  flash-attn 2.8.3.post1 / mmengine 0.10.7 / fluxvla 可编辑安装于 `/opt/fluxvla`
+- 未内置：RoboCasa 资产、数据集、checkpoint（运行时挂载 `/mnt/data/cpfs/users/neri`）
+- 镜像约 24.9 GB（未压缩），首次在 DLC 拉取需要几分钟
+
+镜像构建脚本：`docker/Dockerfile`、`docker/build_and_push.sh`；细节与坑见
+`docker/README.md`。
+
+冒烟（在 GPU 节点上，因为 `import fluxvla` 会在导入期查询 GPU 计算能力）：
+
+```bash
+docker run --rm --gpus all \
+  limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.1 \
+  python -c "import fluxvla; print(fluxvla.__file__)"
+```
+
+DLC 里镜像填上面的地址，启动命令仍是 `TASK=1 bash scripts/dlc_train.sh`
+（工作目录 `/mnt/data/cpfs/users/neri/code/FluxVLA`）。
