@@ -87,6 +87,19 @@ class PI05FlowMatching(PI0FlowMatching):
                 'The Pi05 language backbone must be unconditional '
                 'for VLM training.')
 
+    def freeze_backbones(self) -> None:
+        """Apply the shared freezes plus the Pi05 action-expert switch.
+
+        The freeze_llm_expert flag keeps the action expert at its pretrained
+        weights, so language-heavy VLM or mixed updates cannot drift the
+        policy head. It is independent of freeze_llm_backbone and
+        freeze_vision_backbone, which freeze the shared PaliGemma VLM
+        backbone instead.
+        """
+        super().freeze_backbones()
+        if self.llm_expert is not None:
+            self.llm_expert.requires_grad_(not self.freeze_llm_expert)
+
     def prepare_training_task(self, task):
         self.validate_training_task(task)
         self._training_task = task

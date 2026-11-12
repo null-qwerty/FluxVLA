@@ -107,6 +107,18 @@ def test_pi05_vlm_forward_backward_and_freezing(pi05, with_images):
         assert pi05.projector.projector.weight.grad.abs().sum() > 0
 
 
+def test_freeze_llm_expert_switch_controls_the_action_expert(pi05):
+    # The flag is part of the Pi05 model/config contract; it must actually
+    # freeze the action expert and leave the shared VLM side trainable.
+    pi05.freeze_llm_expert = True
+    pi05.freeze_backbones()
+    assert all(not p.requires_grad for p in pi05.llm_expert.parameters())
+    assert any(p.requires_grad for p in pi05.llm_backbone.parameters())
+    pi05.freeze_llm_expert = False
+    pi05.freeze_backbones()
+    assert all(p.requires_grad for p in pi05.llm_expert.parameters())
+
+
 def test_pi05_future_text_cannot_leak_through_image_prefix(pi05):
     inputs = dict(
         input_ids=torch.tensor([[2, 5, 6, 7, 1]]),
