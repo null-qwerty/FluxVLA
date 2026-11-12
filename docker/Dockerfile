@@ -27,7 +27,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     no_proxy=${NO_PROXY} \
     PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
     MUJOCO_GL=egl \
     PYOPENGL_PLATFORM=egl \
     TOKENIZERS_PARALLELISM=false \
@@ -54,9 +53,10 @@ RUN mkdir -p /usr/share/glvnd/egl_vendor.d \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && install -m 0755 /root/.local/bin/uv /usr/local/bin/uv \
     && /usr/local/bin/uv --version \
-    && PYTHON_VERSION=${PYTHON_VERSION} uv venv --seed /opt/venv \
+    && uv python install "${PYTHON_VERSION}" \
+    && uv venv --python "${PYTHON_VERSION}" --seed /opt/venv \
     && /opt/venv/bin/python -V \
-    && /opt/venv/bin/pip install -q "uv==${UV_VERSION}"
+    && /opt/venv/bin/python -c "import sys; assert sys.version_info[:2] == (3, 10), sys.version"
 
 WORKDIR /opt/fluxvla
 
@@ -75,9 +75,14 @@ COPY tools ./tools
 #   skip assets     -> 8.4 GB RoboCasa assets are mounted at runtime
 #   skip robotwin   -> no cuRobo rebuild (not needed for RoboCasa)
 #   skip flash-attn -> only the optional DreamZero model imports it
-RUN bash scripts/install_env.sh sim-only \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    bash scripts/install_env.sh sim-only --profile cu128 \
         --skip-egl-setup --skip-robocasa-assets --skip-robotwin --skip-flash-attn \
     && /opt/venv/bin/python -c "import torch, robosuite, fluxvla; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+
+# RoboCasa GR1 task repo is installed by the script; keep its assets mount point
+# ready so runtime mounts can drop straight in.
+RUN mkdir -p /opt/fluxvla/src/robocasa-gr1-tabletop-tasks/robocasa/models/assets
 
 # Do not bake build-time proxies into the runtime image.
 ENV http_proxy= https_proxy= no_proxy= HTTP_PROXY= HTTPS_PROXY=
