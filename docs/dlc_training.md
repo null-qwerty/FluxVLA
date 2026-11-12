@@ -34,8 +34,9 @@ cp -r /mnt/data/cpfs/users/eira/checkpoints/pi05_base $DATA/checkpoints/pi05_bas
 
 # 2.2 ego.jsonl + 抽帧（TASK 2/3 才需要；16 进程约 20-40 分钟）
 $DATA/envs/egoprep/bin/python $DATA/code/FluxVLA/tools/egodex_to_vlm_jsonl.py \
-  --root $DATA/data/egodex --out $DATA/egodex_vlm/ego.jsonl \
+  --root $DATA/data/egodex --out $DATA/egodex_vlm \
   --fps-sample 2 --max-frames-per-episode 8 --workers 16
+# --out 是目录：产物为 <out>/ego.jsonl 与 <out>/images/；--max-episodes N 是**每任务**上限
 
 # 2.3 RoboCasa 仿真资产（评测用；训练不需要）
 mkdir -p $DATA/code/FluxVLA/src/robocasa-gr1-tabletop-tasks/robocasa/models/assets
@@ -49,7 +50,7 @@ tar -xf $DATA/env/robocasa_gr1_assets/objects.tar -C $DATA/code/FluxVLA/src/robo
 
 | 量 | 来源（按优先级） |
 |---|---|
-| 节点数 | `WORLD_SIZE` → `PAI_WORKER_NUM` → `MLP_WORKER_NUM` → 1 |
+| 节点数 | `NNODES` → `WORLD_SIZE`（DLC 官方定义：分布式作业的节点总数）→ `PAI_WORKER_NUM` → `MLP_WORKER_NUM` → 1 |
 | 节点序号 | `RANK` → `PAI_WORKER_INDEX` → `MLP_ROLE_INDEX` → `NODE_RANK` → 0 |
 | 每节点卡数 | `NPROC_PER_NODE` → `MLP_WORKER_GPU` → `CUDA_VISIBLE_DEVICES` 列表长度 → `nvidia-smi -L` → 1 |
 | master | `MASTER_ADDR`（rank0 缺失时取本机首个 IP）+ `MASTER_PORT`（默认 29500） |

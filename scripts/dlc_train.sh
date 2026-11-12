@@ -172,6 +172,21 @@ export TOKENIZERS_PARALLELISM=false
 check_dir "${ROBOCASA_DATA_ROOT}" "sync the RoboCasa dataset to ${DATA_ROOT}/data/robocasa_lerobot_V2.1"
 check_file "${PI05_CHECKPOINT}" "put the Pi0.5 base checkpoint at ${CKPT_ROOT}/pi05_base (see docs/dlc_training.md)"
 
+PYTHON_BIN="${PYTHON_BIN:-python}"
+command -v "${PYTHON_BIN}" >/dev/null 2>&1 || PYTHON_BIN="python3"
+log "python: $(command -v "${PYTHON_BIN}") $("${PYTHON_BIN}" -V 2>&1)"
+if [[ "${DRY_RUN}" != "1" ]]; then
+  if ! "${PYTHON_BIN}" -c "import torch" >/dev/null 2>&1; then
+    die "torch is not importable by ${PYTHON_BIN}; use the FluxVLA training image (see scripts/install_env.sh)"
+  fi
+  if ! "${PYTHON_BIN}" -c "import torch; assert torch.cuda.is_available()" >/dev/null 2>&1; then
+    die "torch cannot see any GPU in this container; check the DLC resource spec / nvidia-smi"
+  fi
+  if ! "${PYTHON_BIN}" -c "import fluxvla" >/dev/null 2>&1; then
+    die "fluxvla is not importable; cd ${REPO_DIR} and run bash scripts/install_env.sh sim-only (or pip install -e .)"
+  fi
+fi
+
 case "${TASK}" in
   1)
     run_train \
