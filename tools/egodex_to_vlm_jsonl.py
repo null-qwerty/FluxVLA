@@ -365,6 +365,13 @@ def extract_frames_ffmpeg(video_path,
     """
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
+        # Fall back to the ffmpeg binary shipped by the imageio-ffmpeg wheel.
+        try:
+            import imageio_ffmpeg
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:  # pragma: no cover - optional decoder
+            ffmpeg = None
+    if ffmpeg is None:
         raise RuntimeError("ffmpeg is not available.")
     fps = probe_video(video_path)[0]
     pattern = os.path.join(output_dir, "frame_%05d.jpg")
@@ -431,13 +438,16 @@ def extract_frames_imageio(video_path,
 def extract_frames(video_path, indices, output_dir, image_max_side,
                    jpeg_quality):
     os.makedirs(output_dir, exist_ok=True)
+    # Prefer the imageio streaming decoder: it stops at the last requested
+    # frame, so only the first seconds of a 1080p episode are decoded. The
+    # ffmpeg path is the fallback for environments without imageio-ffmpeg.
     try:
-        return extract_frames_ffmpeg(video_path, indices, output_dir,
-                                     image_max_side, jpeg_quality)
-    except Exception as error:  # noqa: BLE001 - fall back to imageio
-        LOGGER.debug('ffmpeg extraction failed (%s); using imageio', error)
         return extract_frames_imageio(video_path, indices, output_dir,
                                       image_max_side, jpeg_quality)
+    except Exception as error:  # noqa: BLE001 - fall back to ffmpeg
+        LOGGER.debug('imageio extraction failed (%s); using ffmpeg', error)
+        return extract_frames_ffmpeg(video_path, indices, output_dir,
+                                     image_max_side, jpeg_quality)
 
 
 def read_hdf5_meta(hdf5_path, confidence_threshold=_ACTIVE_CONFIDENCE):
