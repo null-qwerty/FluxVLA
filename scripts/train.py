@@ -498,10 +498,12 @@ def _load_config(config_path):
     """
     try:
         return Config.fromfile(config_path)
-    except Exception as error:  # noqa: BLE001 - fall back to the plain parser
-        from mmengine.config.utils import ConfigParsingError
-        if not isinstance(error, ConfigParsingError):
-            raise
+    except Exception:  # noqa: BLE001 - retry with the plain parser
+        # MMEngine picks the lazy parser when a config references `_base_` as
+        # an object. That path either reports the inheritance-chain error
+        # (ConfigParsingError) or, for configs that read os.environ at import
+        # time, a bare RuntimeError. The non-lazy parser handles both and
+        # reports genuine config errors clearly.
         return Config.fromfile(config_path, lazy_import=False)
 
 

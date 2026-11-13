@@ -49,7 +49,7 @@ import os
 _base_ = './pi05_paligemma_robocasa_ego_vlm_mixed_full_finetune.py'
 
 # DDPTrainRunner rejects these FSDP-only fields and owns LoRA injection.
-for _fsdp_only in ('fsdp_wrap_policy', 'sharding_strategy'):
+for _fsdp_only in ('fsdp_wrap_policy', 'sharding_strategy', 'change_key_name'):
     _base_.runner.pop(_fsdp_only, None)
 
 # Serial stage 2 trains RoboCasa actions only: no ego language stream.
@@ -99,7 +99,10 @@ runner = dict(
     train_task='vla',
     # Keep the 40,000-update budget of the mixed arms for comparability.
     max_steps=40000,
-    static_graph=True,
+    # DDP static_graph cannot be combined with gradient checkpointing +
+    # PEFT adapters here: the autograd graph changes across iterations and
+    # DDP aborts with "expect_autograd_hooks_ INTERNAL ASSERT FAILED".
+    static_graph=False,
     metric=dict(
         active_trackers=('jsonl', ),
         window_size=1,
