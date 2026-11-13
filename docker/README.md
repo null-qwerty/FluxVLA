@@ -75,6 +75,14 @@ On DLC, mount the CPFS tree `/mnt/data/cpfs/users/neri` and run
 4. robosuite prints a warning that the `mink` whole-body IK plugin is missing.
    That only affects the example `WHOLE_BODY_MINK_IK` controller; the core
    `WHOLE_BODY_IK` referenced by `default_gr1.json` is present.
-5. Build network: pip/apt use the Aliyun mirrors directly (NO_PROXY) while
+5. Known latent issue (not fixed in the published 0.0.1 image): protobuf 4.25.9 +
+   sentencepiece 0.1.99. Importing `sentencepiece.sentencepiece_model_pb2`
+   raises `Descriptors cannot be created directly`, which breaks the
+   transformers 5 slow-tokenizer converter when a checkpoint dir contains only
+   `tokenizer.model`. The RoboCasa workaround is to ship the full HF tokenizer
+   files (`tokenizer.json` etc.) in the checkpoint dir; the next image build
+   should also pin `protobuf==3.20.3` (TF 2.15 allows <5) or
+   `sentencepiece>=0.2.0`.
+6. Build network: pip/apt use the Aliyun mirrors directly (NO_PROXY) while
    GitHub/uv go through the build-time HTTP proxy. Proxies are cleared from
    the runtime image.

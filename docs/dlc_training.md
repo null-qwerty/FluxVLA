@@ -104,6 +104,7 @@ TASK=1 DRY_RUN=1 bash scripts/dlc_train.sh
 | `missing directory: .../robocasa_lerobot_V2.1` | 数据没挂上；用 `ROBOCASA_DATA_ROOT=` 指到实际路径 |
 | `MASTER_ADDR is not injected for a multi-node job` | 多节点但没注入 master；手动 `MASTER_ADDR=<rank0 ip>` |
 | `WARN: nvidia-smi reports N GPUs ...` | 显式 `NPROC_PER_NODE=<实际卡数>` |
+| `Descriptors cannot be created directly` / `tiktoken is required` / `Could not extract SentencePiece model` | checkpoint 目录里只有 `tokenizer.model`，缺 `tokenizer.json`/`tokenizer_config.json`。transformers 5 会走 sentencepiece 慢转快路径，而镜像里 protobuf 4.25 + sentencepiece 0.1.99 的 pb2 不兼容；失败后回退 tiktoken 也没装。已修复：`checkpoints/pi05_base` 补齐 HF 完整 tokenizer 文件（tokenizer.json、tokenizer_config.json、special_tokens_map.json、added_tokens.json、config.json），`AutoTokenizer` 直接读 fast tokenizer。`scripts/_preflight_config.py` 现在也会检查该目录，缺失即在启动前报错 |
 | `ConfigParsingError: ... "lazy_import" or non-"lazy_import"` | 配方里把 `_base_` 当对象使用（`_base_.pop(...)`），mmengine 会判定为 lazy-import，而继承链里又用了 `_base_ = "...py"` 普通写法，解析器直接报错。已修复：`scripts/train.py` / `scripts/eval.py` 现在先按默认方式加载，遇到该错误自动回退到 `lazy_import=False`；`scripts/_preflight_config.py` 在 torchrun 之前做同样的加载 + 数据路径检查，配置/数据问题会在几秒内报错而不是等到 8 个 rank 起来 |
 | OOM | `PER_DEVICE_BS=4`（或 2），其余不变 |
 

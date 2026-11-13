@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from mmengine import Config
 from mmengine.config.utils import ConfigParsingError
@@ -68,6 +69,22 @@ def main(path: str) -> int:
             sources.append(dataset.get('anno_json_path', []))
         else:
             sources.append(getattr(dataset, 'anno_json_path', []))
+    tokenizer = getattr(getattr(cfg, 'runner', None), 'tokenizer', None)
+    tokenizer_path = getattr(tokenizer, 'model_path', None) if tokenizer is not None else None
+    if tokenizer_path:
+        path = Path(tokenizer_path)
+        if path.is_dir():
+            has_fast = (path / 'tokenizer.json').is_file()
+            has_slow = ((path / 'tokenizer.model').is_file()
+                        and (path / 'tokenizer_config.json').is_file())
+            if not (has_fast or has_slow):
+                print('[preflight] incomplete tokenizer directory: ' + tokenizer_path, file=sys.stderr)
+                print('  need tokenizer.json, or tokenizer.model + tokenizer_config.json', file=sys.stderr)
+                print('  a dir with only tokenizer.model makes transformers 5 use sentencepiece', file=sys.stderr)
+                print('  conversion (fails on protobuf) and then tiktoken; copy the full HF tokenizer files', file=sys.stderr)
+                return 4
+            print('[preflight] tokenizer ok: ' + tokenizer_path)
+
     jsonl = [s for s in _iter_strings(sources) if s.endswith(('.jsonl', '.ndjson'))]
     missing_jsonl = [s for s in jsonl if not os.path.isfile(s)]
     if missing_jsonl:
