@@ -81,6 +81,11 @@ PER_DEVICE_BS=4 TARGET_GLOBAL_BS=256 MAX_STEPS=40000 NUM_WORKERS=8 bash scripts/
 
 ## 5. 冒烟 → 正式
 
+启动脚本在 `torchrun` 之前会跑 `scripts/_preflight_config.py`（单进程）：
+解析配置、检查 24 个 RoboCasa 数据根、检查 ego.jsonl。任何一项不满足会立刻退出并打印缺失路径，
+不会等到 8/16 个 rank 全部起来才报错。
+
+
 第一次跑先缩短步数验证环境与数据（约 5-10 分钟）：
 
 ```bash
@@ -99,7 +104,7 @@ TASK=1 DRY_RUN=1 bash scripts/dlc_train.sh
 | `missing directory: .../robocasa_lerobot_V2.1` | 数据没挂上；用 `ROBOCASA_DATA_ROOT=` 指到实际路径 |
 | `MASTER_ADDR is not injected for a multi-node job` | 多节点但没注入 master；手动 `MASTER_ADDR=<rank0 ip>` |
 | `WARN: nvidia-smi reports N GPUs ...` | 显式 `NPROC_PER_NODE=<实际卡数>` |
-| `ConfigParsingError` | 某些 uv-python 的 `os` 冻结会导致 mmengine lazy-import 误判；换系统 python venv 或加 `lazy_import=False` 验证 |
+| `ConfigParsingError: ... "lazy_import" or non-"lazy_import"` | 配方里把 `_base_` 当对象使用（`_base_.pop(...)`），mmengine 会判定为 lazy-import，而继承链里又用了 `_base_ = "...py"` 普通写法，解析器直接报错。已修复：`scripts/train.py` / `scripts/eval.py` 现在先按默认方式加载，遇到该错误自动回退到 `lazy_import=False`；`scripts/_preflight_config.py` 在 torchrun 之前做同样的加载 + 数据路径检查，配置/数据问题会在几秒内报错而不是等到 8 个 rank 起来 |
 | OOM | `PER_DEVICE_BS=4`（或 2），其余不变 |
 
 ## 7. 产物与评测

@@ -141,6 +141,11 @@ run_train() {
     "runner.metric.active_trackers=('jsonl',)"
     "$@"
   )
+  if [[ "${DRY_RUN}" != "1" ]]; then
+    log "preflight: loading ${config}"
+    "${PYTHON_BIN}" scripts/_preflight_config.py "${config}" \
+      || die "config/data preflight failed for ${config} (see messages above)"
+  fi
   mkdir -p "${work_dir}"
   local cmd=(bash scripts/train.sh "${config}" "${work_dir}" --cfg-options "${cfg_opts[@]}")
   log "run: ${cmd[*]}"

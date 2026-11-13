@@ -487,9 +487,27 @@ def train(args, cfg):
         _relaunch_eval_in_fresh_process(args, eval_ckpt_path, relaunch_spec)
 
 
+def _load_config(config_path):
+    """Load an MMEngine config, tolerating the lazy-import parser conflict.
+
+    Recipes that reference ``_base_`` as an object in their body (for example
+    the RoboCasa + LLaVA mixed recipe) make MMEngine mark the file as a lazy
+    import, while the inherited file uses the plain ``_base_ = "...py"``
+    form. Parsing then raises ConfigParsingError. The non-lazy parser handles
+    both forms and produces the same merged config.
+    """
+    try:
+        return Config.fromfile(config_path)
+    except Exception as error:  # noqa: BLE001 - fall back to the plain parser
+        from mmengine.config.utils import ConfigParsingError
+        if not isinstance(error, ConfigParsingError):
+            raise
+        return Config.fromfile(config_path, lazy_import=False)
+
+
 if __name__ == '__main__':
     args, _ = parse_args()
-    cfg = Config.fromfile(args.config)
+    cfg = _load_config(args.config)
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
     train(args, cfg)

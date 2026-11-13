@@ -343,9 +343,20 @@ def parse_args():
     return args, unknown
 
 
+def _load_config(config_path):
+    """Load an MMEngine config, tolerating the lazy-import parser conflict."""
+    try:
+        return Config.fromfile(config_path)
+    except Exception as error:  # noqa: BLE001 - fall back to the plain parser
+        from mmengine.config.utils import ConfigParsingError
+        if not isinstance(error, ConfigParsingError):
+            raise
+        return Config.fromfile(config_path, lazy_import=False)
+
+
 if __name__ == '__main__':
     args, _ = parse_args()
-    cfg = Config.fromfile(args.config)
+    cfg = _load_config(args.config)
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
     _configure_robotwin_devices(cfg)
