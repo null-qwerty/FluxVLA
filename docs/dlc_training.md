@@ -129,13 +129,15 @@ NUM_GPUS=8 bash scripts/eval_robocasa_manager.sh "$CONFIG" "$CKPT"
   另建议补一条 `LLaVA-665K` 混训对照，用于区分「混训本身」与「ego 内容」的贡献。
 ## 9. 训练镜像
 
-DLC 自定义任务请使用下面这个镜像（已构建并推送，2026-11-12）：
+DLC 自定义任务请使用下面这个镜像（已构建并推送，2026-11-13）：
 
 ```text
-limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.1
+limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.2
 ```
 
-- digest: `sha256:13edd7140be508e4c04d8de72bd5daead6de0cd1118b7f4b280b23635d5f13bf`
+- digest: `sha256:f30e8861e2a6777730f5e19cf644decfd769140396ec7b6d2b224a505144a9ef`
+- 0.0.2 相比 0.0.1：protobuf 固定为 3.20.3（修 sentencepiece pb2 / tokenizer 慢转快失败）、
+  内置 `scripts/_preflight_config.py` 与配置加载回退、LoRA 配置关闭 DDP `static_graph`
 - 内容：ubuntu24.04 / Python 3.10.22 / torch 2.8.0+cu128 / robosuite 1.5.1 /
   flash-attn 2.8.3.post1 / mmengine 0.10.7 / fluxvla 可编辑安装于 `/opt/fluxvla`
 - 未内置：RoboCasa 资产、数据集、checkpoint（运行时挂载 `/mnt/data/cpfs/users/neri`）
@@ -148,9 +150,28 @@ limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24
 
 ```bash
 docker run --rm --gpus all \
-  limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.1 \
+  limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.2 \
   python -c "import fluxvla; print(fluxvla.__file__)"
 ```
 
 DLC 里镜像填上面的地址，启动命令仍是 `TASK=1 bash scripts/dlc_train.sh`
 （工作目录 `/mnt/data/cpfs/users/neri/code/FluxVLA`）。
+
+## 10. 本地已验证 / 待 DLC 冒烟
+
+在本机（1×RTX 3090 24 GB，与镜像同版本环境）用裁剪到 20 条 episode 的 RoboCasa 子集验证过：
+
+| 路径 | 状态 |
+|---|---|
+| TASK 1（LoRA + 全量 action expert） | ✅ 全尺寸模型 2 步训练 + 保存 `step-*.safetensors`（bf16 参数配方） |
+| ego VLM 数据链路（`ego.jsonl` → LLaVAFormatDataset → PaliGemma SFT 样本） | ✅ 20 条样本、13 个监督 token、`images` 3×224×224 |
+| TASK 2 / TASK 3（FSDP 冻结臂、并行混训） | ⏳ 24 GB 显存放不下 3B 的 FSDP 副本，未在本机跑完；建议在 DLC 先跑 `MAX_STEPS=20` 冒烟 |
+
+若 72 GB 卡仍 OOM（正常不会），可退到 0.0.2 里验证过的 bf16 参数配方：
+
+```bash
+TASK=1 MAX_STEPS=20 bash scripts/dlc_train.sh
+# 仍 OOM 时追加：
+# --cfg-options runner.keep_params_fp32=False model.preserve_fp32_residuals=False \
+#   model.vision_backbone.openpi_stem_fp32=False model.openpi_fp32_flow=False
+```
