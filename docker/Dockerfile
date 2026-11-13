@@ -85,7 +85,7 @@ COPY tools ./tools
 # several 60-80 MB wheels.
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=cache,target=/root/.cache/fluxvla \
-    printf 'opencv-python==4.11.0.86\nopencv-python-headless==4.11.0.86\n' > /tmp/pip-constraints.txt \
+    printf 'opencv-python==4.11.0.86\nopencv-python-headless==4.11.0.86\nprotobuf==3.20.3\n' > /tmp/pip-constraints.txt \
     && export CUDA_HOME=/usr/local/cuda \
     && export PATH="/usr/local/cuda/bin:${PATH}" \
     && export CPATH="/usr/local/cuda/include:${CPATH}" \
@@ -95,7 +95,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
        bash scripts/install_env.sh sim-only --profile cu128 \
         --skip-egl-setup --skip-robocasa-assets --skip-robotwin --skip-project \
     && /opt/venv/bin/pip install --no-build-isolation -e /opt/fluxvla \
-    && /opt/venv/bin/python -c "import importlib.util, torch, robosuite, flash_attn; assert importlib.util.find_spec('fluxvla') is not None; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'robosuite', robosuite.__version__, 'flash-attn', flash_attn.__version__)"
+    && /opt/venv/bin/python -c "import importlib.util, torch, robosuite, flash_attn; assert importlib.util.find_spec('fluxvla') is not None; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'robosuite', robosuite.__version__, 'flash-attn', flash_attn.__version__)" \
+    && /opt/venv/bin/python -c "import google.protobuf as p; from sentencepiece import sentencepiece_model_pb2 as m; print('protobuf', p.__version__, 'sentencepiece pb2 ok:', bool(m.ModelProto))"
 
 # RoboCasa GR1 task repo is installed by the script; keep the asset mount point.
 RUN mkdir -p /opt/fluxvla/src/robocasa-gr1-tabletop-tasks/robocasa/models/assets
