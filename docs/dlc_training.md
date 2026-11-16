@@ -81,9 +81,17 @@ PER_DEVICE_BS=4 TARGET_GLOBAL_BS=256 MAX_STEPS=40000 NUM_WORKERS=8 bash scripts/
 
 ## 5. 冒烟 → 正式
 
-启动脚本在 `torchrun` 之前会跑 `scripts/_preflight_config.py`（单进程）：
-解析配置、检查 24 个 RoboCasa 数据根、检查 ego.jsonl。任何一项不满足会立刻退出并打印缺失路径，
-不会等到 8/16 个 rank 全部起来才报错。
+启动脚本在 `torchrun` 之前会跑 `scripts/_preflight_config.py`（单进程），依次检查：
+
+1. 配置能解析（带 lazy-import 回退）
+2. 所有组件字典的键与其类签名一致（退出码 5）
+3. `runner.max_steps` / `runner.max_epochs` 不同时设置（退出码 6）
+4. 24 个 RoboCasa 数据根存在（退出码 2）
+5. 配置引用的本地 checkpoint / tokenizer 路径存在（退出码 7）
+6. tokenizer 目录完整（退出码 4）
+7. `ego.jsonl` 等 VLM 标注文件存在（退出码 3）
+
+任何一项不满足都在几秒内退出并打印缺失路径，不会等到 8/16 个 rank 全部起来才报错。
 
 
 第一次跑先缩短步数验证环境与数据（约 5-10 分钟）：
@@ -104,6 +112,8 @@ TASK=1 DRY_RUN=1 bash scripts/dlc_train.sh
 | `missing directory: .../robocasa_lerobot_V2.1` | 数据没挂上；用 `ROBOCASA_DATA_ROOT=` 指到实际路径 |
 | `MASTER_ADDR is not injected for a multi-node job` | 多节点但没注入 master；手动 `MASTER_ADDR=<rank0 ip>` |
 | `WARN: nvidia-smi reports N GPUs ...` | 显式 `NPROC_PER_NODE=<实际卡数>` |
+| `AssertionError: Only one of max_steps or max_epochs can be set!` | stage1（ego SFT）继承的 LLaVA-665K 配方是 epoch 制（`max_epochs=1`），而启动器总是传 `max_steps`。已修复：stage1 配置改为 `max_epochs=None, max_steps=40000`；启动器同时传 `runner.max_epochs=None` 兜底；preflight 现在会检查两者不能同时为真（退出码 6） |
+| `missing local checkpoint/tokenizer paths`（preflight 退出码 7） | stage1 从 LLaVA 配方继承了写死的 `./checkpoints/pi05_base`。已修复：stage1 的 `model.pretrained_name_or_path` / 数据 transform 的 `tokenizer_path` / TextVQA eval 的 `preprocessor.tokenizer_path` 都改为读 `PI05_CHECKPOINT` / `PI05_TOKENIZER`（启动器已导出）；preflight 会静态检查所有本地路径是否存在 |
 | `Descriptors cannot be created directly` / `tiktoken is required` / `Could not extract SentencePiece model` | checkpoint 目录里只有 `tokenizer.model`，缺 `tokenizer.json`/`tokenizer_config.json`。transformers 5 会走 sentencepiece 慢转快路径，而镜像里 protobuf 4.25 + sentencepiece 0.1.99 的 pb2 不兼容；失败后回退 tiktoken 也没装。已修复：`checkpoints/pi05_base` 补齐 HF 完整 tokenizer 文件（tokenizer.json、tokenizer_config.json、special_tokens_map.json、added_tokens.json、config.json），`AutoTokenizer` 直接读 fast tokenizer。`scripts/_preflight_config.py` 现在也会检查该目录，缺失即在启动前报错 |
 | `ConfigParsingError: ... "lazy_import" or non-"lazy_import"` | 配方里把 `_base_` 当对象使用（`_base_.pop(...)`），mmengine 会判定为 lazy-import，而继承链里又用了 `_base_ = "...py"` 普通写法，解析器直接报错。已修复：`scripts/train.py` / `scripts/eval.py` 现在先按默认方式加载，遇到该错误自动回退到 `lazy_import=False`；`scripts/_preflight_config.py` 在 torchrun 之前做同样的加载 + 数据路径检查，配置/数据问题会在几秒内报错而不是等到 8 个 rank 起来 |
 | OOM | `PER_DEVICE_BS=4`（或 2），其余不变 |
