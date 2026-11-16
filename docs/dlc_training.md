@@ -238,30 +238,7 @@ docker run --rm --gpus all \
 DLC 里镜像填上面的地址，启动命令仍是 `TASK=1 bash scripts/dlc_train.sh`
 （工作目录 `/mnt/data/cpfs/users/neri/code/FluxVLA`）。
 
-## 10. 监控（TensorBoard）
-
-DLC 任务把指标写到 `<DATA_ROOT>/work_dirs/<run>/`：
-
-- `*.jsonl`：每步一行（`jsonl` tracker，启动器默认开启）
-- `tensorboard/<run_id>/`：原生 TensorBoard 事件（启动器现默认同时开 `tensorboard` tracker）
-
-在**有 CPFS 挂载的 CPU 节点**（例如 data_process）上起一个 TensorBoard，用 SSH 端口转发看：
-
-```bash
-# 在 data_process 上（幂等，可重复执行；stop 可停掉）
-bash /mnt/data/cpfs/users/neri/code/FluxVLA/tools/serve_tensorboard.sh
-# 输出: TensorBoard: http://127.0.0.1:6006/
-
-# 在你本地机器上
-ssh -N -L 6006:127.0.0.1:6006 data_process
-# 浏览器打开 http://localhost:6006
-```
-
-旧任务只有 `*.jsonl` 时，`tools/metrics_jsonl_to_tensorboard.py` 会把它增量转成
-`<run>/tensorboard_jsonl/<run_id>/` 事件文件（`serve_tensorboard.sh` 已自动以 30s 轮询后台运行），
-所以正在跑的任务也能实时看到曲线，无需重启训练；新任务则直接写原生事件。
-
-## 11. 本地已验证 / 待 DLC 冒烟
+## 10. 本地已验证 / 待 DLC 冒烟
 
 在本机（1×RTX 3090 24 GB，与镜像同版本环境）用裁剪到 20 条 episode 的 RoboCasa 子集验证过：
 
