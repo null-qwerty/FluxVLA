@@ -118,17 +118,88 @@ TASK=1 DRY_RUN=1 bash scripts/dlc_train.sh
 | `ConfigParsingError: ... "lazy_import" or non-"lazy_import"` | 配方里把 `_base_` 当对象使用（`_base_.pop(...)`），mmengine 会判定为 lazy-import，而继承链里又用了 `_base_ = "...py"` 普通写法，解析器直接报错。已修复：`scripts/train.py` / `scripts/eval.py` 现在先按默认方式加载，遇到该错误自动回退到 `lazy_import=False`；`scripts/_preflight_config.py` 在 torchrun 之前做同样的加载 + 数据路径检查，配置/数据问题会在几秒内报错而不是等到 8 个 rank 起来 |
 | OOM | `PER_DEVICE_BS=4`（或 2），其余不变 |
 
-## 7. 产物与评测
+## 7. 产物与 RoboCasa 评测
 
-- 训练产物：`DATA_ROOT/work_dirs/<run>/{config.json, dataset_statistics.json, checkpoints/latest-checkpoint.safetensors}`
-- 评测需要 ckpt 在 `<run>/checkpoints/` 下（runner 默认从 ckpt 的上两级目录读 `dataset_statistics.json`）
-- 评测命令（在装好 robocasa 的机器上）：
+训练产物：`DATA_ROOT/work_dirs/<run>/{config.json, dataset_statistics.json, checkpoints/*.safetensors}`。
+评测必须拿到 `<run>/checkpoints/` 下的 checkpoint：runner 会从 ckpt 的上两级目录（即 `<run>/`）
+读 `dataset_statistics.json` 做反归一化；ckpt 里的权重是**合并后的普通 state_dict**（不是 PEFT 适配器），
+所以 LoRA 臂和混训臂用同一套评测流程。
+
+### 7.1 一键启动（DLC GPU 节点，镜像内）
+
+```bash
+cd /mnt/data/cpfs/users/neri/code/FluxVLA
+
+# 先冒烟：1 个任务 x 1 trial x 30 步，约 5-8 分钟（含 14 GB ckpt 加载）
+EVAL_TASK=1 SMOKE=1 bash scripts/dlc_eval.sh
+
+# 全量：24 任务 x 50 trials x 720 步
+EVAL_TASK=1 bash scripts/dlc_eval.sh        # TASK 1：RoboCasa-only LoRA
+EVAL_TASK=3 bash scripts/dlc_eval.sh        # TASK 3：ego + RoboCasa 并行混训
+EVAL_TASK=2 bash scripts/dlc_eval.sh        # TASK 2：ego SFT -> RoboCasa LoRA
+```
+
+`EVAL_TASK` 只是默认 ckpt/config 的映射；也可以显式指定：
 
 ```bash
 CONFIG=configs/pi05/pi05_paligemma_robocasa_ego_vlm_mixed_lora.py \
-CKPT=/mnt/data/cpfs/users/neri/work_dirs/pi05_robocasa_lora_full_expert/checkpoints/latest-checkpoint.safetensors \
-NUM_GPUS=8 bash scripts/eval_robocasa_manager.sh "$CONFIG" "$CKPT"
+CKPT=$DATA_ROOT/work_dirs/pi05_robocasa_lora_full_expert/checkpoints/step-040000-epoch-000-loss=0.0275.safetensors \
+bash scripts/dlc_eval.sh
 ```
+
+常用覆盖项：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `TASK_IDS` | 全部 24 个 | 只跑子集，如 `TASK_IDS="0 1 2"` |
+| `NUM_TRIALS_PER_TASK` | 50 | 每个任务 trial 数（对齐榜单） |
+| `NUM_GPUS` | 可见卡数 | 每卡一个 eval worker |
+| `MAX_TASKS_PER_GPU` | 1 | 单卡并发任务数 |
+| `MAX_EPISODE_STEPS` | 720 | 冒烟时调小 |
+| `SAVE_VIDEO` | False | 存 rollout 视频比较占盘 |
+| `OUTPUT_DIR` | `$DATA_ROOT/work_dirs/eval_runs/<run>_<ts>` | 结果目录 |
+| `SMOKE` | 0 | 1 = 1 任务/1 trial/30 步 |
+| `DRY_RUN` | 0 | 1 = 只打印命令与预检 |
+
+`scripts/dlc_eval.sh` 会先做 4 项预检（`scripts/_preflight_eval.py`）：配置能解析且有
+`RobocasaEvalRunner` 的 24 任务列表、ckpt 存在、`dataset_statistics.json` 存在、RoboCasa 资产齐全；
+任一项不满足都会在几秒内报错退出。
+
+### 7.2 资产与渲染环境
+
+- 镜像里 `robocasa` 包的资产目录是 `/opt/fluxvla/src/robocasa-gr1-tabletop-tasks/robocasa/models/assets`，
+  但镜像只带了 `fixtures/arenas/scenes` 的空壳；8.4 GB 物体资产在
+  `$DATA_ROOT/env/robocasa_gr1_assets/assets`（`objects/{objaverse,sketchfab,lightwheel}`、`textures`、`fixtures` 等）。
+- `scripts/dlc_eval.sh` 会自动把该目录软链到镜像内的资产路径（容器内 root，可直接改），
+  无需在 DLC 里额外配置挂载；`ROBOCASA_ASSETS_DIR` 可覆盖来源。
+- 渲染走 EGL：脚本导出 `MUJOCO_GL=egl`、`PYOPENGL_PLATFORM=egl`；
+  `generative_textures/` 只在 `generative_textures="100p"` 纹理随机化时用到，GR1 评测 `gym.make()` 不传该参数，缺失不影响评测。
+
+### 7.3 结果在哪看
+
+```text
+$DATA_ROOT/work_dirs/eval_runs/<run>_<ts>/
+├── manager.log                    # 汇总进度（每个 task 的成功数/总数）
+├── summary.csv                    # 最终 per-task / per-group / overall 成功率
+├── task_logs/task<id>_gpu<g>.log  # 单个任务的完整日志
+├── robocasa/gpu<g>_task<id>_results.json
+└── task_status/, failed_tasks.txt, manager_config.yaml
+```
+
+- 每个 task 的 json/csv 里 `successes/total_episodes` 即该任务成功率；`summary.csv` 末行是 overall。
+- manager 结束时打印 `summary: <OUTPUT_DIR>/summary.csv`；失败任务写进 `failed_tasks.txt`。
+- 参考：PI0.5（官方 51.42%）。24×50 全量在 8 卡约 1.5-3 小时（每卡同时 1 个任务）。
+
+### 7.4 常见问题
+
+| 现象 | 原因/处理 |
+|---|---|
+| `checkpoint not found` | 确认 `<run>/checkpoints/latest-checkpoint.safetensors` 存在；中途评测可显式传某个 `step-*.safetensors` |
+| `missing dataset statistics` | ckpt 必须放在 `<run>/checkpoints/` 下，且 `<run>/dataset_statistics.json` 存在（训练脚本自动写） |
+| `incomplete RoboCasa assets` | 资产没同步/路径不对；用 `ROBOCASA_ASSETS_DIR=` 指定，或先跑 `scripts/download_robocasa_assets.py` |
+| 某个 task 失败 | 看 `task_logs/task<id>_gpu<g>.log`；常见是显存/渲染（EGL）或该任务资产缺失 |
+| 渲染报 EGL/driver 错误 | 确认节点有 GPU 且镜像有 EGL ICD；不要设 `MUJOCO_GL=osmesa` |
+| 想跑更快 | 只跑子集 `TASK_IDS`，或减少 `NUM_TRIALS_PER_TASK`（报告里注明） |
 
 ## 8. 三个任务的对照关系
 

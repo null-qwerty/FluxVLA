@@ -154,7 +154,12 @@ parser.add_argument('config')
 parser.add_argument('--cfg-options', nargs='+', action=DictAction)
 args, _ = parser.parse_known_args()
 
-cfg = Config.fromfile(args.config)
+# Ego/mixed configs make mmengine pick the lazy parser, which fails on the
+# plain _base_ inheritance chain; retry with the non-lazy parser.
+try:
+    cfg = Config.fromfile(args.config)
+except Exception:  # noqa: BLE001
+    cfg = Config.fromfile(args.config, lazy_import=False)
 if args.cfg_options is not None:
     cfg.merge_from_dict(args.cfg_options)
 eval_runner_prefix = 'eval.runner' if hasattr(cfg.eval, 'runner') else 'eval'
@@ -401,7 +406,12 @@ parser.add_argument('config')
 parser.add_argument('--cfg-options', nargs='+', action=DictAction)
 args, _ = parser.parse_known_args()
 
-cfg = Config.fromfile(args.config)
+# Ego/mixed configs make mmengine pick the lazy parser, which fails on the
+# plain _base_ inheritance chain; retry with the non-lazy parser.
+try:
+    cfg = Config.fromfile(args.config)
+except Exception:  # noqa: BLE001
+    cfg = Config.fromfile(args.config, lazy_import=False)
 if args.cfg_options is not None:
     cfg.merge_from_dict(args.cfg_options)
 runner_cfg = get_eval_runner_cfg(cfg)
