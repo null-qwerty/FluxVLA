@@ -5,10 +5,14 @@
 #   TASK=1 bash scripts/dlc_train.sh
 #   TASK=2 bash scripts/dlc_train.sh
 #   TASK=3 bash scripts/dlc_train.sh
+#   TASK=4 bash scripts/dlc_train.sh
 #
-# TASK=1  VLM backbone LoRA + full action expert, fine-tune on RoboCasa 24 tasks
-# TASK=2  stage 1: ego VLM SFT  ->  stage 2: same as TASK=1 (LoRA + full expert)
+# TASK=1  VLM LoRA (adapters on the expert too) on RoboCasa 24 tasks, 40k steps
+# TASK=2  stage 1: ego VLM SFT  ->  stage 2: same as TASK=1
 # TASK=3  parallel mixed training (RoboCasa VLA stream : ego VLM stream = 3:1)
+# TASK=4  VLM LoRA + FULL action expert, 100k steps, lr/warmup of the
+#         published PI0.5 RoboCasa recipe (51.42%). Use this to separate
+#         "LoRA/40k undertrained" from the official full-finetune recipe.
 #
 # Topology is auto-detected from the variables DLC / PAI injects:
 #   WORLD_SIZE (number of nodes), RANK (node rank), MASTER_ADDR, MASTER_PORT,
@@ -37,7 +41,7 @@ die() { echo "ERROR: $*" >&2; exit 2; }
 if [[ -z "${TASK}" ]]; then
   die "set TASK=1|2|3 (1: LoRA+full expert on RoboCasa, 2: ego SFT then 1, 3: parallel mixed)"
 fi
-case "${TASK}" in 1|2|3) ;; *) die "TASK must be 1, 2 or 3 (got '${TASK}')" ;; esac
+case "${TASK}" in 1|2|3|4) ;; *) die "TASK must be 1, 2, 3 or 4 (got '${TASK}')" ;; esac
 
 # ---------------------------------------------------------------- paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -103,7 +107,11 @@ TOTAL_GPUS=$((NNODES * GPUS_PER_NODE))
 # ---------------------------------------------------------------- batch math
 PER_DEVICE_BS="${PER_DEVICE_BS:-8}"
 TARGET_GLOBAL_BS="${TARGET_GLOBAL_BS:-256}"
-MAX_STEPS="${MAX_STEPS:-40000}"
+# Per-task default: TASK 4 matches the published 100k-step recipe.
+case "${TASK}" in
+  4) MAX_STEPS="${MAX_STEPS:-100000}" ;;
+  *) MAX_STEPS="${MAX_STEPS:-40000}" ;;
+esac
 NUM_WORKERS="${NUM_WORKERS:-4}"
 # Checkpoint cadence. The base runner saves on `global_step % save_iter_interval`,
 # so without this a 40k-step run only writes at 10k/20k/30k/40k and early
@@ -247,6 +255,12 @@ case "${TASK}" in
     run_train \
       "configs/pi05/pi05_paligemma_robocasa_ego_vlm_mixed_full_finetune.py" \
       "${WORK_ROOT}/pi05_robocasa_ego_mixed"
+    ;;
+  4)
+    log 'VLM LoRA + full action expert, published 100k-step recipe'
+    run_train \
+      "configs/pi05/pi05_paligemma_robocasa_vlm_lora_expert_full.py" \
+      "${WORK_ROOT}/pi05_robocasa_lora_vlm_expert_full"
     ;;
 esac
 

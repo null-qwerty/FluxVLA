@@ -17,9 +17,10 @@
 
 | TASK | 内容 | 配置文件 | 输出目录（`DATA_ROOT/work_dirs/`） |
 |---|---|---|---|
-| 1 | VLM backbone LoRA + action expert 全量，RoboCasa 24 任务微调 | `pi05_paligemma_robocasa_ego_vlm_mixed_lora.py` | `pi05_robocasa_lora_full_expert` |
+| 1 | VLM LoRA（适配器也盖在 action expert 上），40k 步 | `pi05_paligemma_robocasa_ego_vlm_mixed_lora.py` | `pi05_robocasa_lora_full_expert` |
 | 2 | 先 ego VLM SFT，再同 TASK 1 | `pi05_paligemma_egodex_vlm_sft.py` → `..._lora.py` | `pi05_egodex_vlm_sft`、`pi05_robocasa_lora_from_ego` |
 | 3 | 并行混训（RoboCasa VLA : ego VLM = 3:1） | `pi05_paligemma_robocasa_ego_vlm_mixed_full_finetune.py` | `pi05_robocasa_ego_mixed` |
+| 4 | VLM LoRA + **action expert 全量**，100k 步、lr 2.5e-5 / warmup 5000（对齐官方 51.42% 配方） | `pi05_paligemma_robocasa_vlm_lora_expert_full.py` | `pi05_robocasa_lora_vlm_expert_full` |
 
 TASK 1 不需要 ego 数据；TASK 2/3 需要 `DATA_ROOT/egodex_vlm/ego.jsonl`（见第 2 节）。
 
@@ -201,13 +202,38 @@ $DATA_ROOT/work_dirs/eval_runs/<run>_<ts>/
 | 渲染报 EGL/driver 错误 | 确认节点有 GPU 且镜像有 EGL ICD；不要设 `MUJOCO_GL=osmesa` |
 | 想跑更快 | 只跑子集 `TASK_IDS`，或减少 `NUM_TRIALS_PER_TASK`（报告里注明） |
 
-## 8. 三个任务的对照关系
+## 8. 任务的对照关系与「分数偏低」排查
 
-- TASK 1 是「纯 RoboCasa 数据 + LoRA 微调」的基线（无 ego）。
+- TASK 1 是「纯 RoboCasa 数据 + LoRA 微调」的基线（无 ego，40k 步）。
 - TASK 3 是「ego 与 RoboCasa 同时进 batch」的并行混训。
 - TASK 2 是「ego 先改 VLM，再在 RoboCasa 上 LoRA」的串行方案。
-- 三者步数预算一致（40k updates、global 256），可直接比较 24×50 的成功率；
+- TASK 4 是 TASK 1 的修正版：VLM 仍用 LoRA，但 **action expert 全量训练**，步数/LR/预热
+  对齐官方发布配方（`pi05_paligemma_robocasa_full_data_full_finetune_bs256`，24×50 评测 51.42%）。
+- 三者（1/2/3）步数预算一致（40k updates、global 256），可直接比较 24×50 的成功率；
   另建议补一条 `LLaVA-665K` 混训对照，用于区分「混训本身」与「ego 内容」的贡献。
+
+### TASK 1 实测评测 32.42% 时该看什么
+
+24×50 实测：Cabinet 34 / Drawer 34 / Microwave 28 / Generalization 32.56 / overall 32.42（389/1200）
+（结果目录 `work_dirs/eval_runs/<run>_<ts>/`）。与官方 51.42% 的差异来自**训练配方**，
+不是评测或数据链路：
+
+| 项 | 官方发布 run（51.42%） | TASK 1（32.42%） |
+|---|---|---|
+| 可训练参数 | 全量 4.18B | LoRA 适配器 + 4 个投影头，0.57B（13.5%） |
+| action expert | 全量训练 | 只有 LoRA 适配器（专家内部仅 13.8% 可训练） |
+| 步数 | 100000（约 2 epoch） | 40000（约 0.8 epoch） |
+| lr / warmup / decay | 2.5e-5 / 5000 / 50000 | 2e-5 / 1200 / 40000（继承自 LLaVA 配方） |
+| 数据 / 变换 / 归一化统计 / batch=256 / 评测协议 | 相同 | 相同 |
+
+排查顺序建议：
+
+1. **确认评测链路**：用同一套 `scripts/dlc_eval.sh` 评测官方发布的 51.42% checkpoint
+   （`checkpoints/baseline_pi05_robocasa_bs256/checkpoints/step-100000-...safetensors`，
+   已按官方仓库结构下载到 CPFS），应复现 ~51%。若复现不了，再查评测协议而不是训练。
+2. **TASK 4**（改配方重训）是最直接的修复：expert 全量 + 100k 步 + 官方 lr。
+3. 只想单独验证「步数」假设：`TASK=1 MAX_STEPS=100000 bash scripts/dlc_train.sh`
+   （lr 调度仍按 40k 衰减到 min_lr，可近似看作数据量对照）。
 
 ### stage 1（ego VLM SFT）的预算与留出集
 
