@@ -70,7 +70,10 @@ def test_stage1_is_pure_ego_vlm_sft():
     runner = cfg.runner
     assert runner.type == 'FSDPTrainRunner'
     assert runner.train_task == 'vlm'
-    assert runner.max_epochs == 1 and runner.max_steps is None
+    # Stage 1 is step-based like the other ego arms; the inherited Llava-665K
+    # recipe was epoch-based (max_epochs=1), which conflicts with the
+    # launcher-provided max_steps and trips the BASE runner assertion.
+    assert runner.max_epochs is None and runner.max_steps is not None
     assert 'mixed_training' not in runner
     dataset = cfg.train_dataloader.dataset
     assert dataset.type == 'LLaVAFormatDataset'

@@ -48,6 +48,13 @@ _base_ = './pi05_paligemma_llava665k_full_finetune.py'
 ego_root = os.environ.get('EGO_VLM_DATA_ROOT', './datasets/egodex_vlm')
 ego_jsonl = ego_root + '/ego.jsonl'
 ego_weight = float(os.environ.get('EGO_VLM_WEIGHT', '1.0'))
+# The inherited Llava-665K recipe hard-codes ./checkpoints/pi05_base. Keep the
+# same defaults but honour the shared-mount overrides used on DLC/CPFS.
+_PI05_CHECKPOINT = os.environ.get(
+    'PI05_CHECKPOINT', './checkpoints/pi05_base/model.safetensors')
+_PI05_TOKENIZER = os.environ.get('PI05_TOKENIZER', './checkpoints/pi05_base')
+
+model = dict(pretrained_name_or_path=_PI05_CHECKPOINT)
 
 # Same dataset/transform/collator contract as the LLaVA-665K VLM SFT recipe:
 # one image + a two-turn text conversation per row, no robot state or action.
@@ -66,10 +73,15 @@ train_dataloader = dict(
                 type='ProcessPaliGemmaVLMSFTInputs',
                 image_size=224,
                 max_length=1024,
-                tokenizer_path='./checkpoints/pi05_base'),
+                tokenizer_path=_PI05_TOKENIZER),
         ]))
 
 runner = dict(
+    # The inherited Llava-665K recipe is epoch-based (max_epochs=1). Stage 1
+    # uses the same step budget as the other ego arms, and BASE runner asserts
+    # that max_steps / max_epochs are not both set.
+    max_epochs=None,
+    max_steps=40000,
     metric=dict(
         active_trackers=('jsonl', ),
         window_size=1,
@@ -79,4 +91,6 @@ runner = dict(
 # --eval-after-train or scripts/eval.sh. Keep its artifacts inside this run.
 eval = dict(
     checkpoint_dir='./work_dirs/pi05_egodex_vlm_sft/checkpoints',
-    run_dir='./work_dirs/pi05_egodex_vlm_sft/textvqa')
+    run_dir='./work_dirs/pi05_egodex_vlm_sft/textvqa',
+    # The inherited TextVQA recipe hard-codes ./checkpoints/pi05_base too.
+    preprocessing=dict(tokenizer_path=_PI05_TOKENIZER))

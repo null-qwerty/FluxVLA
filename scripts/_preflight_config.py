@@ -4,17 +4,17 @@
 Usage: python scripts/_preflight_config.py <config.py>
 
 Checks, in order:
-  1. config parses (same lazy-import fallback as scripts/train.py)
-  2. every component dict (runner, transforms, optimizer, ...) only passes
-     keyword arguments its class declares, which catches errors such as
-     "Unexpected runner config field(s): change_key_name" before torchrun
-  3. all RoboCasa data roots exist
-  4. the tokenizer directory is complete
-  5. referenced VLM annotation files exist
+  1. config parses (lazy-import fallback)
+  2. component dict keys match their class signatures (catches e.g.
+     "Unexpected runner config field(s)")
+  3. exactly one of runner.max_steps / runner.max_epochs is set
+  4. RoboCasa data roots exist
+  5. local checkpoint / tokenizer paths referenced by the config exist
+  6. tokenizer directories are complete
+  7. referenced VLM annotation files exist
 
-Component-key validation is static: class signatures are read from
-fluxvla/**/*.py with ast, so this script does not import fluxvla and works on
-a GPU-less node.
+All checks are static: class signatures are read from fluxvla/**/*.py with ast,
+so this script does not import fluxvla and works on a GPU-less node.
 """
 from __future__ import annotations
 
@@ -28,6 +28,9 @@ from mmengine.config.utils import ConfigParsingError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STRICT_EXTRA_KEYS_MARKER = 'Unexpected runner config field'
+LOCAL_PREFIXES = ('./', '../', '/')
+TOKENIZER_SUFFIXES = ('.model',)
+PATH_KEYS = ('tokenizer_path', 'model_path')
 
 
 def load(path: str) -> Config:
@@ -40,7 +43,34 @@ def load(path: str) -> Config:
         return Config.fromfile(path, lazy_import=False)
 
 
+def _as_dict(value):
+    if isinstance(value, Config):
+        return value._cfg_dict
+    return value
+
+
+def _iter_pairs(value, prefix=''):
+    value = _as_dict(value)
+    if isinstance(value, dict):
+        for key, item in value.items():
+            path = '.'.join([prefix, str(key)]) if prefix else str(key)
+            yield path, key, item
+            yield from _iter_pairs(item, path)
+    elif isinstance(value, (list, tuple)):
+        for position, item in enumerate(value):
+            yield from _iter_pairs(item, progress_join(prefix, position))
+
+
+def progress_join(prefix, position):
+    return ''.join([prefix, '[', str(position), ']'])
+
+
+def _is_local_path(value):
+    return isinstance(value, str) and value.startswith(LOCAL_PREFIXES)
+
+
 def _iter_strings(value):
+    value = _as_dict(value)
     if isinstance(value, str):
         yield value
     elif isinstance(value, dict):
@@ -83,8 +113,7 @@ def _component_index():
 
 
 def _check_components(value, index, path, errors):
-    if isinstance(value, Config):
-        value = value._cfg_dict
+    value = _as_dict(value)
     if isinstance(value, dict):
         type_name = value.get('type')
         if isinstance(type_name, str) and type_name in index:
@@ -96,26 +125,49 @@ def _check_components(value, index, path, errors):
                     errors.append(
                         f'{path}.{type_name}: does not accept {key!r}')
         for key, item in value.items():
-            _check_components(item, index, '.'.join([path, str(key)]), errors)
+            _check_components(item, index, f'{path}.{key}', errors)
     elif isinstance(value, (list, tuple)):
         for position, item in enumerate(value):
-            _check_components(item, index, ''.join([path, str(position)]), errors)
+            _check_components(item, index, f'{path}[{position}]', errors)
+
+
+def _tokenizer_dir_is_complete(path):
+    directory = Path(path)
+    if not directory.is_dir():
+        return True
+    has_fast = (directory / 'tokenizer.json').is_file()
+    has_slow = ((directory / 'tokenizer.model').is_file()
+                and (directory / 'tokenizer_config.json').is_file())
+    return has_fast or has_slow
 
 
 def main(path: str) -> int:
     cfg = load(path)
     task = getattr(cfg.runner, 'train_task', None)
-    print('[preflight] config ok: ' + path + ' train_task=' + str(task))
+    print(f'[preflight] config ok: {path} train_task={task}')
 
     errors = []
-    index = _component_index()
-    _check_components(cfg, index, 'cfg', errors)
+    _check_components(cfg, _component_index(), 'cfg', errors)
     if errors:
         print('[preflight] invalid component config keys:', file=sys.stderr)
         for message in errors:
             print('  ' + message, file=sys.stderr)
         return 5
-    print('[preflight] component keys ok, classes scanned: ' + str(len(index)))
+    print('[preflight] component keys ok')
+
+    runner = _as_dict(getattr(cfg, 'runner', None))
+    if isinstance(runner, dict):
+        max_steps = runner.get('max_steps')
+        max_epochs = runner.get('max_epochs')
+        if max_steps is not None and max_epochs is not None:
+            print('[preflight] runner.max_steps and runner.max_epochs are both set:',
+                  file=sys.stderr)
+            print(f'  max_steps={max_steps} max_epochs={max_epochs}',
+                  file=sys.stderr)
+            print('  only one may be set; the launcher passes max_epochs=None',
+                  file=sys.stderr)
+            return 6
+    print('[preflight] runner budget ok')
 
     roots = []
     loader = getattr(cfg, 'train_dataloader', None)
@@ -130,7 +182,37 @@ def main(path: str) -> int:
         for root in missing_roots:
             print('  ' + root, file=sys.stderr)
         return 2
-    print('[preflight] data roots ok: ' + str(len(roots)))
+    print(f'[preflight] data roots ok: {len(roots)}')
+
+    local_paths = []
+    for config_path, key, item in _iter_pairs(cfg):
+        if key in PATH_KEYS and _is_local_path(item):
+            local_paths.append((config_path, item))
+    pretrained = _as_dict(getattr(getattr(cfg, 'model', None),
+                                 'pretrained_name_or_path', None))
+    if _is_local_path(pretrained):
+        local_paths.append(('cfg.model.pretrained_name_or_path', pretrained))
+    missing_paths = [(name, value) for name, value in local_paths
+                     if not os.path.exists(value)]
+    if missing_paths:
+        print('[preflight] missing local checkpoint/tokenizer paths:',
+              file=sys.stderr)
+        for name, value in missing_paths:
+            print(f'  {name} = {value}', file=sys.stderr)
+        print('  set PI05_CHECKPOINT / PI05_TOKENIZER or copy the files',
+              file=sys.stderr)
+        return 7
+    print(f'[preflight] local paths ok: {len(local_paths)}')
+
+    tokenizer_dirs = sorted({value for name, value in local_paths
+                             if 'tokenizer' in name.lower()})
+    for directory in tokenizer_dirs:
+        if not _tokenizer_dir_is_complete(directory):
+            print('[preflight] incomplete tokenizer directory: ' + directory,
+                  file=sys.stderr)
+            print('  need tokenizer.json, or tokenizer.model + tokenizer_config.json',
+                  file=sys.stderr)
+            return 4
 
     sources = []
     for loader_key in ('vlm_dataloader', 'train_dataloader'):
@@ -147,27 +229,6 @@ def main(path: str) -> int:
         else:
             sources.append(getattr(dataset, 'anno_json_path', []))
 
-    tokenizer = getattr(getattr(cfg, 'runner', None), 'tokenizer', None)
-    tokenizer_path = (getattr(tokenizer, 'model_path', None)
-                      if tokenizer is not None else None)
-    if tokenizer_path:
-        path_obj = Path(tokenizer_path)
-        if path_obj.is_dir():
-            has_fast = (path_obj / 'tokenizer.json').is_file()
-            has_slow = ((path_obj / 'tokenizer.model').is_file()
-                        and (path_obj / 'tokenizer_config.json').is_file())
-            if not (has_fast or has_slow):
-                print('[preflight] incomplete tokenizer directory: ' + tokenizer_path,
-                      file=sys.stderr)
-                print('  need tokenizer.json, or tokenizer.model + tokenizer_config.json',
-                      file=sys.stderr)
-                print('  a dir with only tokenizer.model forces the sentencepiece converter',
-                      file=sys.stderr)
-                print('  copy the full HF tokenizer files into that directory',
-                      file=sys.stderr)
-                return 4
-            print('[preflight] tokenizer ok: ' + tokenizer_path)
-
     jsonl = [s for s in _iter_strings(sources)
              if s.endswith(('.jsonl', '.ndjson'))]
     missing_jsonl = [s for s in jsonl if not os.path.isfile(s)]
@@ -177,7 +238,7 @@ def main(path: str) -> int:
             print('  ' + name, file=sys.stderr)
         return 3
     if jsonl:
-        print('[preflight] vlm annotations ok: ' + str(len(jsonl)))
+        print(f'[preflight] vlm annotations ok: {len(jsonl)}')
     return 0
 
 

@@ -138,6 +138,9 @@ run_train() {
     "train_dataloader.per_device_num_workers=${NUM_WORKERS}"
     "runner.grad_accumulation_steps=${GA}"
     "runner.max_steps=${MAX_STEPS}"
+    # Base runner asserts that max_steps and max_epochs are not both set; the
+    # launcher is always step-based, so clear any epoch budget from the config.
+    "runner.max_epochs=None"
     "runner.metric.active_trackers=('jsonl',)"
     "$@"
   )
