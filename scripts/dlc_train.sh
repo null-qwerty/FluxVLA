@@ -141,7 +141,9 @@ run_train() {
     # Base runner asserts that max_steps and max_epochs are not both set; the
     # launcher is always step-based, so clear any epoch budget from the config.
     "runner.max_epochs=None"
-    "runner.metric.active_trackers=('jsonl',)"
+    # Keep JSONL for post-hoc analysis; TensorBoard events let a CPU node serve
+    # live curves over the shared filesystem without any extra conversion.
+    "runner.metric.active_trackers=('jsonl', 'tensorboard')"
     "$@"
   )
   if [[ "${DRY_RUN}" != "1" ]]; then
