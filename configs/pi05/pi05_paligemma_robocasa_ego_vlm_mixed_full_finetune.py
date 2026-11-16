@@ -52,6 +52,11 @@ llava_jsonl = llava_root + '/llava_v1_5_mix665k.json'
 # arm measures the ego content itself; the LLaVA-665K recipe is the separate
 # "VLM mixing" control arm.
 ego_weight = float(os.environ.get('EGO_VLM_WEIGHT', '1.0'))
+# Byte-offset index for the JSONL annotations. Defaults to the recipe dir;
+# the DLC launcher points this at node-local storage so N ranks do not fight
+# over one CPFS index file (and a stale CPFS metadata view cannot poison it).
+_VLM_INDEX_CACHE = os.environ.get('VLM_INDEX_CACHE_DIR',
+                                './datasets/.cache/vlm')
 llava_weight = float(os.environ.get('EGO_LLAVA_WEIGHT', '0.0'))
 
 _vlm_sources = [dict(path=ego_jsonl, weight=ego_weight)]
@@ -67,7 +72,7 @@ vlm_dataloader = dict(
         type='LLaVAFormatDataset',
         anno_json_path=_vlm_sources,
         data_root_path=_vlm_roots,
-        index_cache_dir='./datasets/.cache/vlm',
+        index_cache_dir=_VLM_INDEX_CACHE,
         # Fail fast on a missing extracted frame instead of silently
         # resampling a different EgoDex frame.
         max_retry_times=0,

@@ -51,6 +51,9 @@ cd "${REPO_DIR}"
 DATA_ROOT="${DATA_ROOT:-/mnt/data/cpfs/users/neri}"
 ROBOCASA_DATA_ROOT="${ROBOCASA_DATA_ROOT:-${DATA_ROOT}/data/robocasa_lerobot_V2.1}"
 EGO_VLM_DATA_ROOT="${EGO_VLM_DATA_ROOT:-${DATA_ROOT}/egodex_vlm}"
+# Byte-offset index for the JSONL annotations: node-local, so the ranks of a
+# job do not share one CPFS index file (and its fingerprint) across nodes.
+VLM_INDEX_CACHE_DIR="${VLM_INDEX_CACHE_DIR:-/tmp/fluxvla_vlm_index}"
 # Prefer an episode/task split produced by tools/split_egodex_vlm_jsonl.py so
 # the SFT stream never sees validation frames; fall back to the single file.
 EGO_TRAIN_JSONL="${EGO_TRAIN_JSONL:-${EGO_VLM_DATA_ROOT}/ego_train.jsonl}"
@@ -178,6 +181,13 @@ run_train() {
     log "preflight: loading ${config}"
     "${PYTHON_BIN}" scripts/_preflight_config.py "${config}" \
       || die "config/data preflight failed for ${config} (see messages above)"
+    # Build the JSONL index once per node: a stale CPFS metadata view otherwise
+    # kills the whole job inside build_dataset_from_cfg with
+    # "Annotation changed during indexing".
+    mkdir -p "${VLM_INDEX_CACHE_DIR}"
+    log "preflight: JSONL index (cache=${VLM_INDEX_CACHE_DIR})"
+    "${PYTHON_BIN}" scripts/_preflight_index.py "${config}" \
+      || die "JSONL annotation/index preflight failed for ${config}"
   fi
   mkdir -p "${work_dir}"
   local cmd=(bash scripts/train.sh "${config}" "${work_dir}" --cfg-options "${cfg_opts[@]}")
@@ -203,7 +213,7 @@ export RANK="${NODE_RANK}"
 export MASTER_ADDR
 export MASTER_PORT
 export ROBOCASA_DATA_ROOT EGO_VLM_DATA_ROOT EGO_VLM_JSONL
-export PI05_CHECKPOINT PI05_TOKENIZER
+export PI05_CHECKPOINT PI05_TOKENIZER VLM_INDEX_CACHE_DIR
 export WANDB_MODE="${WANDB_MODE:-disabled}"
 export TOKENIZERS_PARALLELISM=false
 

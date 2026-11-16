@@ -55,6 +55,9 @@ ego_weight = float(os.environ.get('EGO_VLM_WEIGHT', '1.0'))
 _PI05_CHECKPOINT = os.environ.get(
     'PI05_CHECKPOINT', './checkpoints/pi05_base/model.safetensors')
 _PI05_TOKENIZER = os.environ.get('PI05_TOKENIZER', './checkpoints/pi05_base')
+# Node-local byte-offset index cache (see the mixed ego recipe).
+_VLM_INDEX_CACHE = os.environ.get('VLM_INDEX_CACHE_DIR',
+                                './datasets/.cache/vlm')
 
 model = dict(pretrained_name_or_path=_PI05_CHECKPOINT)
 
@@ -65,7 +68,7 @@ train_dataloader = dict(
         type='LLaVAFormatDataset',
         anno_json_path=[dict(path=ego_jsonl, weight=ego_weight)],
         data_root_path=ego_root,
-        index_cache_dir='./datasets/.cache/vlm',
+        index_cache_dir=_VLM_INDEX_CACHE,
         # Fail fast on a missing extracted frame instead of silently
         # resampling another EgoDex frame.
         max_retry_times=0,
