@@ -46,7 +46,9 @@ import os
 _base_ = './pi05_paligemma_llava665k_full_finetune.py'
 
 ego_root = os.environ.get('EGO_VLM_DATA_ROOT', './datasets/egodex_vlm')
-ego_jsonl = ego_root + '/ego.jsonl'
+# Tools/split_egodex_vlm_jsonl.py writes ego_train.jsonl / ego_val.jsonl; point
+# this stream at the train part so validation frames never leak into SFT.
+ego_jsonl = os.environ.get('EGO_VLM_JSONL', ego_root + '/ego.jsonl')
 ego_weight = float(os.environ.get('EGO_VLM_WEIGHT', '1.0'))
 # The inherited Llava-665K recipe hard-codes ./checkpoints/pi05_base. Keep the
 # same defaults but honour the shared-mount overrides used on DLC/CPFS.
@@ -81,7 +83,11 @@ runner = dict(
     # uses the same step budget as the other ego arms, and BASE runner asserts
     # that max_steps / max_epochs are not both set.
     max_epochs=None,
-    max_steps=40000,
+    # 4111 samples x 118 unique answers: loss is memorised by ~150 steps
+    # (~9 epochs). 300 steps is enough; the launcher overrides this anyway.
+    max_steps=300,
+    # Default is 10000, which would lose every early checkpoint.
+    save_iter_interval=100,
     metric=dict(
         active_trackers=('jsonl', ),
         window_size=1,

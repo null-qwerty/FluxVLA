@@ -47,7 +47,17 @@ cd "${REPO_DIR}"
 DATA_ROOT="${DATA_ROOT:-/mnt/data/cpfs/users/neri}"
 ROBOCASA_DATA_ROOT="${ROBOCASA_DATA_ROOT:-${DATA_ROOT}/data/robocasa_lerobot_V2.1}"
 EGO_VLM_DATA_ROOT="${EGO_VLM_DATA_ROOT:-${DATA_ROOT}/egodex_vlm}"
-EGO_JSONL="${EGO_JSONL:-${EGO_VLM_DATA_ROOT}/ego.jsonl}"
+# Prefer an episode/task split produced by tools/split_egodex_vlm_jsonl.py so
+# the SFT stream never sees validation frames; fall back to the single file.
+EGO_TRAIN_JSONL="${EGO_TRAIN_JSONL:-${EGO_VLM_DATA_ROOT}/ego_train.jsonl}"
+if [[ -z "${EGO_JSONL:-}" ]]; then
+  if [[ -f "${EGO_TRAIN_JSONL}" ]]; then
+    EGO_JSONL="${EGO_TRAIN_JSONL}"
+  else
+    EGO_JSONL="${EGO_VLM_DATA_ROOT}/ego.jsonl"
+  fi
+fi
+export EGO_VLM_JSONL="${EGO_VLM_JSONL:-${EGO_JSONL}}"
 CKPT_ROOT="${CKPT_ROOT:-${DATA_ROOT}/checkpoints}"
 PI05_CHECKPOINT="${PI05_CHECKPOINT:-${CKPT_ROOT}/pi05_base/model.safetensors}"
 PI05_TOKENIZER="${PI05_TOKENIZER:-${CKPT_ROOT}/pi05_base}"
@@ -95,6 +105,14 @@ PER_DEVICE_BS="${PER_DEVICE_BS:-8}"
 TARGET_GLOBAL_BS="${TARGET_GLOBAL_BS:-256}"
 MAX_STEPS="${MAX_STEPS:-40000}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
+# Checkpoint cadence. The base runner saves on `global_step % save_iter_interval`,
+# so without this a 40k-step run only writes at 10k/20k/30k/40k and early
+# weights (before overfitting) are lost.
+SAVE_ITER="${SAVE_ITER:-1000}"
+# Stage 1 (ego VLM SFT) has 4.1k samples and ~17 steps per epoch: loss is
+# already memorised by ~150 steps, so 40k steps is 2300 epochs of overfitting.
+STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-300}"
+STAGE1_SAVE_ITER="${STAGE1_SAVE_ITER:-100}"
 
 MICRO=$((PER_DEVICE_BS * TOTAL_GPUS))
 GA=$(( (TARGET_GLOBAL_BS + MICRO - 1) / MICRO ))
@@ -119,7 +137,7 @@ print_env() {
   log "topology: nodes=${NNODES} rank=${NODE_RANK} gpus/node=${GPUS_PER_NODE} total_gpus=${TOTAL_GPUS}"
   log "master: ${MASTER_ADDR}:${MASTER_PORT}"
   log "batch: per_device=${PER_DEVICE_BS} micro=${MICRO} grad_accum=${GA} global=${GLOBAL_BS} (target ${TARGET_GLOBAL_BS})"
-  log "steps=${MAX_STEPS} workers=${NUM_WORKERS}"
+  log "steps=${MAX_STEPS} save_iter=${SAVE_ITER} workers=${NUM_WORKERS}"
   log "robocasa=${ROBOCASA_DATA_ROOT}"
   log "pi05_ckpt=${PI05_CHECKPOINT}"
   if command -v nvidia-smi >/dev/null 2>&1; then
@@ -132,12 +150,16 @@ print_env() {
 
 run_train() {
   # run_train <config> <work_dir> [extra cfg-options ...]
+  # RUN_MAX_STEPS / RUN_SAVE_ITER allow a per-call budget (stage 1 != stage 2).
   local config="$1"; local work_dir="$2"; shift 2
+  local max_steps="${RUN_MAX_STEPS:-${MAX_STEPS}}"
+  local save_iter="${RUN_SAVE_ITER:-${SAVE_ITER}}"
   local cfg_opts=(
     "train_dataloader.per_device_batch_size=${PER_DEVICE_BS}"
     "train_dataloader.per_device_num_workers=${NUM_WORKERS}"
     "runner.grad_accumulation_steps=${GA}"
-    "runner.max_steps=${MAX_STEPS}"
+    "runner.max_steps=${max_steps}"
+    "runner.save_iter_interval=${save_iter}"
     # Base runner asserts that max_steps and max_epochs are not both set; the
     # launcher is always step-based, so clear any epoch budget from the config.
     "runner.max_epochs=None"
@@ -162,7 +184,7 @@ print_env >&2
 {
   echo "task=${TASK} time=$(date -Is) host=$(hostname)"
   echo "nodes=${NNODES} rank=${NODE_RANK} gpus_per_node=${GPUS_PER_NODE} total_gpus=${TOTAL_GPUS} master=${MASTER_ADDR}:${MASTER_PORT}"
-  echo "per_device_bs=${PER_DEVICE_BS} grad_accum=${GA} global_bs=${GLOBAL_BS} max_steps=${MAX_STEPS}"
+  echo "per_device_bs=${PER_DEVICE_BS} grad_accum=${GA} global_bs=${GLOBAL_BS} max_steps=${MAX_STEPS} save_iter=${SAVE_ITER} ego_jsonl=${EGO_VLM_JSONL}"
   env | grep -E '^(WORLD_SIZE|RANK|NODE_RANK|NPROC_PER_NODE|MASTER_ADDR|MASTER_PORT|NVIDIA_VISIBLE_DEVICES|CUDA_VISIBLE_DEVICES|PAI_|MLP_|DLC_)' | sort
 } > "${WORK_ROOT}/dlc_env_TASK${TASK}_rank${NODE_RANK}.txt" 2>/dev/null || true
 
@@ -172,7 +194,7 @@ export WORLD_SIZE="${NNODES}"
 export RANK="${NODE_RANK}"
 export MASTER_ADDR
 export MASTER_PORT
-export ROBOCASA_DATA_ROOT EGO_VLM_DATA_ROOT
+export ROBOCASA_DATA_ROOT EGO_VLM_DATA_ROOT EGO_VLM_JSONL
 export PI05_CHECKPOINT PI05_TOKENIZER
 export WANDB_MODE="${WANDB_MODE:-disabled}"
 export TOKENIZERS_PARALLELISM=false
@@ -203,8 +225,8 @@ case "${TASK}" in
     ;;
   2)
     check_file "${EGO_JSONL}" "generate it with tools/egodex_to_vlm_jsonl.py (see docs/dlc_training.md)"
-    log "stage 1/2: ego VLM SFT"
-    run_train \
+    log "stage 1/2: ego VLM SFT (${EGO_JSONL}, max_steps=${STAGE1_MAX_STEPS}, save_iter=${STAGE1_SAVE_ITER})"
+    RUN_MAX_STEPS="${STAGE1_MAX_STEPS}" RUN_SAVE_ITER="${STAGE1_SAVE_ITER}" run_train \
       "configs/pi05/pi05_paligemma_egodex_vlm_sft.py" \
       "${WORK_ROOT}/pi05_egodex_vlm_sft"
     STAGE1_CKPT="${WORK_ROOT}/pi05_egodex_vlm_sft/checkpoints/latest-checkpoint.safetensors"

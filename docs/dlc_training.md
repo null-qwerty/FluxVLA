@@ -208,6 +208,29 @@ $DATA_ROOT/work_dirs/eval_runs/<run>_<ts>/
 - TASK 2 是「ego 先改 VLM，再在 RoboCasa 上 LoRA」的串行方案。
 - 三者步数预算一致（40k updates、global 256），可直接比较 24×50 的成功率；
   另建议补一条 `LLaVA-665K` 混训对照，用于区分「混训本身」与「ego 内容」的贡献。
+
+### stage 1（ego VLM SFT）的预算与留出集
+
+`ego.jsonl` 只有 4111 条样本、118 种唯一答案、4 种 prompt，按 global batch 256 算约
+17 step/epoch。实测 loss 在 ~140 step（约 8 epoch）就到 token accuracy 0.999、
+~235 step 后 <1e-3，之后完全是记忆训练集，跑满 40k step ≈ 2300 epoch 只会过拟合并可能
+损伤基座 VLM。因此：
+
+- 启动器默认 `STAGE1_MAX_STEPS=300`（≈17 epoch）、`STAGE1_SAVE_ITER=100`（能留下早期权重，
+  `save_iter_interval` 默认 10000 会一个中间 checkpoint 都不存）；
+- `tools/split_egodex_vlm_jsonl.py` 可按 episode 或 task 划分留出集：
+
+  ```bash
+  python tools/split_egodex_vlm_jsonl.py \
+      --input /mnt/data/cpfs/users/neri/egodex_vlm/ego.jsonl \
+      --val-fraction 0.15 --group-by episode   # 或 --group-by task 整任务留出
+  ```
+
+  生成 `ego_train.jsonl` / `ego_val.jsonl` / `split_manifest.json`；启动器检测到
+  `ego_train.jsonl` 会自动用它跑 SFT（也可用 `EGO_VLM_JSONL=` 显式指定）；
+- 判断「学没学到东西」要用留出集指标（后续可用 `ego_val.jsonl` 离线算 loss/token acc），
+  不能再拿 train loss 当依据。
+
 ## 9. 训练镜像
 
 DLC 自定义任务请使用下面这个镜像（已构建并推送，2026-11-13）：
