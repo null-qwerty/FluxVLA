@@ -16,7 +16,9 @@ CPU/login node next to the shared filesystem.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -67,11 +69,17 @@ def output_dir_for(jsonl: Path) -> Path:
 
 class Mirror:
 
-    def __init__(self, jsonl: Path, out_dir: Path, offset: int, step: int):
+    def __init__(self,
+                 jsonl: Path,
+                 out_dir: Path,
+                 offset: int,
+                 step: int,
+                 max_backfill: int = 0):
         self.jsonl = jsonl
         self.out_dir = out_dir
         self.offset = offset
         self.step = step
+        self.max_backfill = max_backfill
         self.writer = None
         self.written = 0
 
@@ -88,42 +96,52 @@ class Mirror:
         if size < self.offset:
             # File was truncated or rotated: restart from the beginning.
             self.offset = 0
+            self.close()
         if size == self.offset:
             return False
         with self.jsonl.open("r", encoding="utf-8", errors="ignore") as handle:
             handle.seek(self.offset)
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    metrics = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(metrics, dict):
-                    continue
-                step = step_of(metrics)
-                if step is None:
-                    step = self.step + 1
-                self.step = max(self.step, step)
-                values = []
-                for key, value in metrics.items():
-                    if key.endswith("/Step") or key == "Step":
-                        continue
-                    number = as_float(value)
-                    if number is None:
-                        continue
-                    values.append(Summary.Value(tag=key, simple_value=number))
-                if not values:
-                    continue
-                self._ensure_writer()
-                self.writer.add_event(
-                    Event(
-                        wall_time=time.time(),
-                        step=step,
-                        summary=Summary(value=values)))
-                self.written += 1
+            if self.offset == 0 and self.max_backfill > 0:
+                # Long historical runs would otherwise spend minutes writing
+                # every past point to the shared filesystem; the last N
+                # points are enough for a usable curve.
+                lines = handle.readlines()
+                if len(lines) > self.max_backfill:
+                    lines = lines[-self.max_backfill:]
+            else:
+                lines = list(handle)
             self.offset = handle.tell()
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                metrics = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(metrics, dict):
+                continue
+            step = step_of(metrics)
+            if step is None:
+                step = self.step + 1
+            self.step = max(self.step, step)
+            values = []
+            for key, value in metrics.items():
+                if key.endswith("/Step") or key == "Step":
+                    continue
+                number = as_float(value)
+                if number is None:
+                    continue
+                values.append(Summary.Value(tag=key, simple_value=number))
+            if not values:
+                continue
+            self._ensure_writer()
+            self.writer.add_event(
+                Event(
+                    wall_time=time.time(),
+                    step=step,
+                    summary=Summary(value=values)))
+            self.written += 1
         if self.writer is not None:
             self.writer.flush()
         return True
@@ -164,10 +182,24 @@ def main():
         type=float,
         default=0,
         help="poll interval in seconds (0 = single pass)")
+    parser.add_argument(
+        "--backfill",
+        type=int,
+        default=1000,
+        help="when starting fresh, convert only the last N points per run")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
     state_path = root / STATE_NAME
+
+    # Single instance: two converters would interleave event files.
+    lock_handle = (root / ".tb_jsonl.lock").open("w")
+    try:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("[tb-mirror] another instance is already running", flush=True)
+        return
+
     state = load_state(state_path)
     mirrors = {}
 
@@ -178,11 +210,16 @@ def main():
                 continue
             saved = state.get(key, {})
             out_dir = Path(saved.get("out") or output_dir_for(jsonl))
+            if not saved and OUT_DIR_NAME in out_dir.parts and out_dir.exists():
+                # No recorded offset for this run: rebuild the mirror from
+                # scratch so restarts do not duplicate points.
+                shutil.rmtree(out_dir, ignore_errors=True)
             mirror = Mirror(
                 jsonl,
                 out_dir,
                 int(saved.get("offset", 0)),
-                int(saved.get("step", 0)))
+                int(saved.get("step", 0)),
+                max_backfill=args.backfill)
             mirrors[key] = mirror
 
     refresh()
