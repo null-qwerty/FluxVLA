@@ -34,11 +34,9 @@ mkdir -p $DATA/checkpoints
 cp -r /mnt/data/cpfs/users/eira/checkpoints/pi05_base $DATA/checkpoints/pi05_base   # model.safetensors + tokenizer.model
 
 # 2.2 ego.jsonl + 抽帧（TASK 2/3 才需要；16 进程约 20-40 分钟）
-# 生成后在同一台机器上写一份 manifest，供每节点 preflight 校验数据一致性：
-# python3 -c "import hashlib,json,os; p='<out>/ego.jsonl'; \
-#   json.dump({'sha256':hashlib.sha256(open(p,'rb').read()).hexdigest(), \
-#             'size':os.path.getsize(p), 'rows':sum(1 for _ in open(p))}, \
-#             open(p+'.manifest.json','w'), indent=2)"
+# 生成后在同一台机器（数据机）上写 manifest，供每节点 preflight 校验数据一致性：
+# python tools/write_annotation_manifest.py <out>/ego.jsonl \
+#                                               <out>/ego_train.jsonl <out>/ego_val.jsonl
 $DATA/envs/egoprep/bin/python $DATA/code/FluxVLA/tools/egodex_to_vlm_jsonl.py \
   --root $DATA/data/egodex --out $DATA/egodex_vlm \
   --fps-sample 2 --max-frames-per-episode 8 --workers 16
@@ -126,7 +124,7 @@ TASK=1 DRY_RUN=1 bash scripts/dlc_train.sh
 | `missing directory: .../robocasa_lerobot_V2.1` | 数据没挂上；用 `ROBOCASA_DATA_ROOT=` 指到实际路径 |
 | `MASTER_ADDR is not injected for a multi-node job` | 多节点但没注入 master；手动 `MASTER_ADDR=<rank0 ip>` |
 | `WARN: nvidia-smi reports N GPUs ...` | 显式 `NPROC_PER_NODE=<实际卡数>` |
-| `RuntimeError: Annotation changed during indexing.` | `ego.jsonl` 的 byte-offset 索引按 `(path, size, mtime_ns, ctime_ns)` 指纹缓存，CPFS 在跨节点的元数据缓存里偶尔短暂停留在旧版本，导致建索引过程中指纹变化。已修复：启动器把 `VLM_INDEX_CACHE_DIR` 指到节点本地 `/tmp`，并在 `torchrun` 之前用 `scripts/_preflight_index.py` 预热索引；同时用 `ego.jsonl.manifest.json`（sha256+size）校验节点看到的是最新副本，不一致会重试 6 次×5s 后以退出码 8 明确报错。重新生成 manifest（在写数据的机器上执行）：`python3 -c "import hashlib,json,os; p='.../ego.jsonl'; json.dump({'sha256':hashlib.sha256(open(p,'rb').read()).hexdigest(),'size':os.path.getsize(p),'rows':sum(1 for _ in open(p))}, open(p+'.manifest.json','w'), indent=2)"` |
+| `RuntimeError: Annotation changed during indexing.` | `ego.jsonl` 的 byte-offset 索引按 `(path, size, mtime_ns, ctime_ns)` 指纹缓存，CPFS 在跨节点的元数据缓存里偶尔短暂停留在旧版本，导致建索引过程中指纹变化。已修复：启动器把 `VLM_INDEX_CACHE_DIR` 指到节点本地 `/tmp`，并在 `torchrun` 之前用 `scripts/_preflight_index.py` 预热索引；同时用 `ego.jsonl.manifest.json`（sha256+size）校验节点看到的是最新副本，不一致会重试 6 次×5s 后以退出码 8 明确报错。重新生成 manifest（在写数据的机器上执行）：`python tools/write_annotation_manifest.py /mnt/data/cpfs/users/neri/egodex_vlm/ego*.jsonl` |
 | `AssertionError: Only one of max_steps or max_epochs can be set!` | stage1（ego SFT）继承的 LLaVA-665K 配方是 epoch 制（`max_epochs=1`），而启动器总是传 `max_steps`。已修复：stage1 配置改为 `max_epochs=None, max_steps=40000`；启动器同时传 `runner.max_epochs=None` 兜底；preflight 现在会检查两者不能同时为真（退出码 6） |
 | `missing local checkpoint/tokenizer paths`（preflight 退出码 7） | stage1 从 LLaVA 配方继承了写死的 `./checkpoints/pi05_base`。已修复：stage1 的 `model.pretrained_name_or_path` / 数据 transform 的 `tokenizer_path` / TextVQA eval 的 `preprocessor.tokenizer_path` 都改为读 `PI05_CHECKPOINT` / `PI05_TOKENIZER`（启动器已导出）；preflight 会静态检查所有本地路径是否存在 |
 | `Descriptors cannot be created directly` / `tiktoken is required` / `Could not extract SentencePiece model` | checkpoint 目录里只有 `tokenizer.model`，缺 `tokenizer.json`/`tokenizer_config.json`。transformers 5 会走 sentencepiece 慢转快路径，而镜像里 protobuf 4.25 + sentencepiece 0.1.99 的 pb2 不兼容；失败后回退 tiktoken 也没装。已修复：`checkpoints/pi05_base` 补齐 HF 完整 tokenizer 文件（tokenizer.json、tokenizer_config.json、special_tokens_map.json、added_tokens.json、config.json），`AutoTokenizer` 直接读 fast tokenizer。`scripts/_preflight_config.py` 现在也会检查该目录，缺失即在启动前报错 |
