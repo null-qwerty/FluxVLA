@@ -37,10 +37,19 @@ if [[ "${SKIP_PROJECT_INSTALL:-0}" == "1" ]]; then
   exit 0
 fi
 
-# Dev machines with an editable install keep it; a fresh container never does.
-if [[ "${DRY_RUN}" != "1" ]] && "${PYTHON_BIN}" -c "import fluxvla" >/dev/null 2>&1; then
-  log "fluxvla already importable: $("${PYTHON_BIN}" -c "import fluxvla; print(fluxvla.__file__)" 2>/dev/null | tail -1)"
-  exit 0
+# Keep a dev editable install of *this* repo (path inside REPO_DIR). A fluxvla
+# baked into an older image lives outside the repo and must be replaced, so
+# the mounted code always wins.
+if [[ "${DRY_RUN}" != "1" ]]; then
+  INSTALLED="$("${PYTHON_BIN}" -c "import fluxvla; print(fluxvla.__file__)" 2>/dev/null | tail -1 || true)"
+  if [[ -n "${INSTALLED}" && "${INSTALLED}" == "${REPO_DIR}"/* ]]; then
+    log "using editable install of the mounted repo: ${INSTALLED}"
+    exit 0
+  fi
+  if [[ -n "${INSTALLED}" ]]; then
+    log "replacing install outside the repo: ${INSTALLED}"
+    "${PYTHON_BIN}" -m pip uninstall -y fluxvla >/dev/null 2>&1 || true
+  fi
 fi
 
 command -v "${PYTHON_BIN}" >/dev/null 2>&1 || die "python not found: ${PYTHON_BIN}"
