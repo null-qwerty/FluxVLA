@@ -181,7 +181,38 @@ class GR1Kinematics:
         os.environ.setdefault("MUJOCO_GL", "osmesa")
         os.environ.setdefault("PYOPENGL_PLATFORM", "osmesa")
         import robosuite
-        import robocasa  # noqa: F401  registers GR1*FourierHands robots
+        try:
+            import robocasa  # noqa: F401  registers GR1*FourierHands robots
+        except ImportError:
+            # Conversion/validation hosts only need the robot model, not the
+            # RoboCasa task stack. Reproduce RoboCasa's robot registration
+            # (robocasa/models/robots/manipulators/gr1_robot.py) locally.
+            from robosuite.models.robots.manipulators.gr1_robot import GR1
+            from robosuite.robots import register_robot_class
+
+            @register_robot_class("LeggedRobot")
+            class GR1ArmsAndWaist(GR1):
+                """GR1 arms + waist only (no legs/head/base actuation)."""
+
+                def __init__(self, idn=0):
+                    super().__init__(idn=idn)
+                    self._remove_joint_actuation("leg")
+                    self._remove_joint_actuation("head")
+                    self._remove_free_joint()
+
+                @property
+                def init_qpos(self):
+                    init_qpos = np.zeros(17)
+                    init_qpos[3:10] = [0.0, -0.1, 0.0, -1.57, 0.0, 0.0, 0.0]
+                    init_qpos[10:17] = [0.0, 0.1, 0.0, -1.57, 0.0, 0.0, 0.0]
+                    return init_qpos
+
+            @register_robot_class("LeggedRobot")
+            class GR1ArmsAndWaistFourierHands(GR1ArmsAndWaist):
+                @property
+                def default_gripper(self):
+                    return {"right": "FourierRightHand",
+                            "left": "FourierLeftHand"}
         self.env = robosuite.make(
             env_name="Lift",
             robots="GR1ArmsAndWaistFourierHands",
