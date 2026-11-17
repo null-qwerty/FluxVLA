@@ -55,14 +55,20 @@ fi
 command -v "${PYTHON_BIN}" >/dev/null 2>&1 || die "python not found: ${PYTHON_BIN}"
 
 # CUDA arch of the visible GPUs (torch comes from the image environment).
+# CPU-only conversion/validation hosts can pass TORCH_CUDA_ARCH_LIST instead.
 ARCH="$("${PYTHON_BIN}" - <<'PY'
+import os
 import torch
-if not torch.cuda.is_available():
-    raise SystemExit('no CUDA device visible')
-major, minor = torch.cuda.get_device_capability(0)
-print(f'{major}.{minor}')
+if torch.cuda.is_available():
+    major, minor = torch.cuda.get_device_capability(0)
+    print(f'{major}.{minor}')
+else:
+    archs = os.environ.get('TORCH_CUDA_ARCH_LIST', '').split()
+    if not archs:
+        raise SystemExit('no CUDA device visible and TORCH_CUDA_ARCH_LIST is unset')
+    print(archs[0].replace('+PTX', ''))
 PY
-)" || die "cannot detect CUDA arch (is a GPU visible?)"
+)" || die "cannot resolve the CUDA arch to build for"
 
 COMMIT="$(git -C "${REPO_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if git -C "${REPO_DIR}" diff --quiet HEAD -- fluxvla setup.py setup.cfg 2>/dev/null; then
@@ -117,5 +123,19 @@ else
   fi
 fi
 
-"${PYTHON_BIN}" -c "import fluxvla; print('[install-project] fluxvla', fluxvla.__file__)"
+# `import fluxvla` needs a GPU (eagle2 probes CUDA at import time), so CPU
+# conversion/validation hosts verify the install spec instead.
+"${PYTHON_BIN}" - <<'PY'
+import importlib.util
+import torch
+
+spec = importlib.util.find_spec('fluxvla')
+assert spec is not None, 'fluxvla is not installed'
+print('[install-project] fluxvla spec:', spec.origin or spec.submodule_search_locations)
+if torch.cuda.is_available():
+    import fluxvla
+    print('[install-project] fluxvla', fluxvla.__file__)
+else:
+    print('[install-project] no GPU: skipped import check (CPU node)')
+PY
 log "ok"
