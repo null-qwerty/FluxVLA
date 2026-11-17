@@ -94,6 +94,9 @@ echo "[dlc-eval] ckpt=${CKPT}"
 echo "[dlc-eval] gpus=${NUM_GPUS} trials=${NUM_TRIALS_PER_TASK} tasks=${TASK_IDS:-all} max_tasks_per_gpu=${MAX_TASKS_PER_GPU}"
 echo "[dlc-eval] assets=${ROBOCASA_ASSETS_DIR}"
 
+# The image is environment-only: install the project wheel for this node GPU.
+bash scripts/install_project.sh
+
 assets_complete() {
   local dir="$1"
   local rel

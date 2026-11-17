@@ -230,8 +230,10 @@ if [[ "${DRY_RUN}" != "1" ]]; then
   if ! "${PYTHON_BIN}" -c "import torch; assert torch.cuda.is_available()" >/dev/null 2>&1; then
     die "torch cannot see any GPU in this container; check the DLC resource spec / nvidia-smi"
   fi
+  # The image is environment-only: install the project wheel for this node GPU.
+  bash scripts/install_project.sh
   if ! "${PYTHON_BIN}" -c "import fluxvla" >/dev/null 2>&1; then
-    die "fluxvla is not importable; cd ${REPO_DIR} and run bash scripts/install_env.sh sim-only (or pip install -e .)"
+    die "fluxvla is not importable after scripts/install_project.sh"
   fi
 fi
 

@@ -271,29 +271,35 @@ $DATA_ROOT/work_dirs/eval_runs/<run>_<ts>/
 
 ## 9. 训练镜像
 
-DLC 自定义任务请使用下面这个镜像（已构建并推送，2026-11-13）：
+DLC 自定义任务请使用下面这个镜像（**纯环境镜像，不含项目代码**）：
 
 ```text
-limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.2
+limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.3
 ```
 
-- digest: `sha256:f30e8861e2a6777730f5e19cf644decfd769140396ec7b6d2b224a505144a9ef`
-- 0.0.2 相比 0.0.1：protobuf 固定为 3.20.3（修 sentencepiece pb2 / tokenizer 慢转快失败）、
-  内置 `scripts/_preflight_config.py` 与配置加载回退、LoRA 配置关闭 DDP `static_graph`
+- 0.0.3 起镜像只装环境：torch / robosuite / robocasa / Isaac-GR00T / flash-attn /
+  mmengine / protobuf 3.20.3 等；**不包含** FluxVLA 的 `fluxvla/`、`configs/`、`scripts/`、
+  `tools/`，也不做 editable 安装
+- 项目代码在任务启动时从挂载的 CPFS 仓库安装：`scripts/install_project.sh`
+  按「git commit + 本机 CUDA 架构」构建/复用 wheel（首次约 1 分钟，之后命中缓存只需几秒），
+  因此**改代码不需要重建镜像**
 - 内容：ubuntu24.04 / Python 3.10.22 / torch 2.8.0+cu128 / robosuite 1.5.1 /
-  flash-attn 2.8.3.post1 / mmengine 0.10.7 / fluxvla 可编辑安装于 `/opt/fluxvla`
-- 未内置：RoboCasa 资产、数据集、checkpoint（运行时挂载 `/mnt/data/cpfs/users/neri`）
+  flash-attn 2.8.3.post1 / mmengine 0.10.7 / protobuf 3.20.3
+- 未内置：项目代码、RoboCasa 资产、数据集、checkpoint（运行时挂载 `/mnt/data/cpfs/users/neri`）
 - 镜像约 24.9 GB（未压缩），首次在 DLC 拉取需要几分钟
+
+wheel 缓存目录：`$DATA_ROOT/env/fluxvla_wheels/fluxvla-<commit>-cu<arch>.whl`
+（可用 `FLUXVLA_WHEEL_DIR` 覆盖；`SKIP_PROJECT_INSTALL=1` 可跳过安装，供本地开发用）。
 
 镜像构建脚本：`docker/Dockerfile`、`docker/build_and_push.sh`；细节与坑见
 `docker/README.md`。
 
-冒烟（在 GPU 节点上，因为 `import fluxvla` 会在导入期查询 GPU 计算能力）：
+冒烟（无需 GPU，验证环境本体）：
 
 ```bash
-docker run --rm --gpus all \
-  limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.2 \
-  python -c "import fluxvla; print(fluxvla.__file__)"
+docker run --rm \
+  limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.3 \
+  python -c "import torch, robosuite, flash_attn; print(torch.__version__, robosuite.__version__)"
 ```
 
 DLC 里镜像填上面的地址，启动命令仍是 `TASK=1 bash scripts/dlc_train.sh`

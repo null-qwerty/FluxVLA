@@ -3,7 +3,7 @@
 #
 #   bash docker/build_and_push.sh                 # build, tag, push
 #   PUSH=0 bash docker/build_and_push.sh          # build + tag only
-#   VERSION=0.0.2 bash docker/build_and_push.sh   # bump the trailing version
+#   VERSION=0.0.4 bash docker/build_and_push.sh   # bump the trailing version
 #   NO_CACHE=1 bash docker/build_and_push.sh
 #
 # Tag convention: <os>-<python>-<cuda>-<pytorch>-<version>
@@ -16,7 +16,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_NAME="${IMAGE_NAME:-limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env}"
-VERSION="${VERSION:-0.0.1}"
+VERSION="${VERSION:-0.0.3}"
 LOCAL_TAG="${LOCAL_TAG:-fluxvla_env:build}"
 PUSH="${PUSH:-1}"
 NO_CACHE="${NO_CACHE:-0}"
