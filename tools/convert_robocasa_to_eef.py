@@ -77,9 +77,20 @@ def convert_episode(path, kin):
     return new_state, new_action, table
 
 
+_KIN = None
+
+
+def _get_kin():
+    """One robot model per worker process (env creation dominates runtime)."""
+    global _KIN
+    if _KIN is None:
+        _KIN = GR1Kinematics()
+    return _KIN
+
+
 def convert_file(job):
     src, dst, = job
-    kin = GR1Kinematics()
+    kin = _get_kin()
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -104,8 +115,8 @@ def convert_file(job):
         pq.write_table(out, dst)
         return {"file": dst, "frames": len(new_state),
                 "state_abs": new_state, "action_delta": new_action}
-    finally:
-        kin.close()
+    except Exception as error:  # noqa: BLE001 - report which episode failed
+        raise RuntimeError(f"conversion failed for {src}: {error}") from error
 
 
 def link_videos(src_task, dst_task):
@@ -168,7 +179,7 @@ def main(argv=None):
     states, actions = [], []
     done = 0
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        for result in pool.map(convert_file, jobs):
+        for result in pool.map(convert_file, jobs, chunksize=4):
             states.append(result["state_abs"])
             actions.append(result["action_delta"])
             done += 1
