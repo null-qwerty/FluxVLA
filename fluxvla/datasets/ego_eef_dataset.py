@@ -71,9 +71,32 @@ class EgoEEFDataset:
     def __len__(self):
         return len(self.records)
 
-    def _load_image(self, relative_path: str) -> np.ndarray:
+    def _load_image(self, record: Dict) -> np.ndarray:
+        import io
+
         from PIL import Image
 
+        if "image_pack" in record:
+            # One tar per episode (see tools/convert_egodex_to_eef.py); keep the
+            # last archive open because consecutive samples share an episode.
+            pack = record["image_pack"]
+            if not os.path.isabs(pack):
+                pack = os.path.join(self.data_root, pack)
+            if getattr(self, "_pack_path", None) != pack:
+                if getattr(self, "_pack", None) is not None:
+                    self._pack.close()
+                import tarfile
+
+                self._pack = tarfile.open(pack, "r")
+                self._pack_path = pack
+            member = record.get("image_member")
+            if member is None:
+                raise KeyError("image_member is required with image_pack")
+            payload = self._pack.extractfile(member).read()
+            with Image.open(io.BytesIO(payload)) as image:
+                return np.asarray(image.convert("RGB"))
+
+        relative_path = record["image"]
         path = relative_path
         if not os.path.isabs(path):
             path = os.path.join(self.data_root, path)
@@ -112,7 +135,7 @@ class EgoEEFDataset:
             "states": state,
             "actions": actions,
             "action_masks": masks,
-            "images": [self._load_image(record[self.image_key])],
+            "images": [self._load_image(record)],
             "img_masks": np.array([True]),
             "task_description": record.get(self.task_key, ""),
             "data_root": self.data_root,

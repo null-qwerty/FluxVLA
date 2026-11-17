@@ -174,18 +174,39 @@ def convert_episode(job):
 
     description = str(task)
     records = []
+    if args.image_format == "tar":
+        # One tar per episode: CPFS writes of ~200k tiny JPEGs are metadata
+        # bound (measured ~18 files/s), one 1.5 MB tar per episode is not.
+        import shutil
+        import tarfile
+
+        pack_dir = Path(out_dir) / "images" / task
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        pack_path = pack_dir / f"{episode_id}.tar"
+        with tarfile.open(pack_path, "w") as archive:
+            for slot, image_path in enumerate(images):
+                if image_path is None:
+                    continue
+                archive.add(image_path, arcname=f"frame_{slot:05d}.jpg")
+        pack_rel = str(pack_path.relative_to(out_dir))
+        shutil.rmtree(image_dir, ignore_errors=True)
     for slot in range(len(indices)):
         if images[slot] is None:
             continue
-        records.append({
+        record = {
             "id": f"{task}/{episode_id}/{slot:05d}",
             "episode_id": f"{task}/{episode_id}",
-            "image": images[slot],
             "task": description,
             "state": states[slot].tolist(),
             "action": actions[slot].tolist(),
             "action_mask": EFF_DIM_MASK.tolist(),
-        })
+        }
+        if args.image_format == "tar":
+            record["image_pack"] = pack_rel
+            record["image_member"] = f"frame_{slot:05d}.jpg"
+        else:
+            record["image"] = images[slot]
+        records.append(record)
     return {"records": records, "states": states, "actions": actions}
 
 
@@ -218,6 +239,10 @@ def main(argv=None):
                         help="per task (0 = all)")
     parser.add_argument("--tasks", nargs="*", default=None)
     parser.add_argument("--image-max-side", type=int, default=640)
+    parser.add_argument("--image-format", choices=("tar", "jpg"),
+                        default="tar",
+                        help="store frames as one tar per episode (default)"
+                             " or as individual jpg files")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--stats-out", default=None)
     args = parser.parse_args(argv)
