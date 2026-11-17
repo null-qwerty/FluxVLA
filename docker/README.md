@@ -11,7 +11,7 @@ python package is installed at job start from the repo mounted on CPFS
 
 | tag | notes |
 |---|---|
-| `ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.3` | env-only (no repo code); the launcher installs the project wheel. See digest in `docs/dlc_training.md` |
+| `ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.3` | env-only (no repo code); the launcher installs the project wheel. digest `sha256:deddc65758274c05636614e5c9039d9d75792c5b5a04d9890f45ced76d23f7ad` |
 | `ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.2` | first fix release: protobuf 3.20.3, project code frozen at 2026-11-13 |
 | `ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.1` | first build; protobuf 4.25.9 (tokenizer conversion broken) |
 

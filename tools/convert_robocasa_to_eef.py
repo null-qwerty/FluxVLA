@@ -135,26 +135,35 @@ def main(argv=None):
     parser.add_argument("--no-videos", action="store_true")
     args = parser.parse_args(argv)
 
-    src_task = Path(args.src)
-    dst_task = Path(args.dst)
-    data_dirs = sorted((src_task / "data").iterdir())
+    src_path = Path(args.src)
+    dst_path = Path(args.dst)
+    # Single task (src/data exists) or a parent with one directory per task.
+    if (src_path / "data").is_dir():
+        tasks = [src_path]
+    else:
+        tasks = [child for child in sorted(src_path.iterdir())
+                 if (child / "data").is_dir()]
+    if not tasks:
+        raise SystemExit(f"no task directories under {src_path}")
+
     jobs = []
-    for chunk in data_dirs:
-        for parquet in sorted(chunk.glob("*.parquet")):
-            rel = parquet.relative_to(src_task)
-            jobs.append((str(parquet), str(dst_task / rel)))
+    for src_task in tasks:
+        dst_task = dst_path / src_task.name if len(tasks) > 1 else dst_path
+        for chunk in sorted((src_task / "data").iterdir()):
+            for parquet in sorted(chunk.glob("*.parquet")):
+                rel = parquet.relative_to(src_task)
+                jobs.append((str(parquet), str(dst_task / rel)))
+        (dst_task / "meta").mkdir(parents=True, exist_ok=True)
+        for name in ("info.json", "episodes.jsonl", "tasks.jsonl",
+                     "episodes_stats.jsonl"):
+            src = src_task / "meta" / name
+            if src.is_file():
+                shutil.copy2(src, dst_task / "meta" / name)
+        if not args.no_videos:
+            link_videos(src_task, dst_task)
     if args.limit:
         jobs = jobs[:args.limit]
-    print(f"[convert] {src_task.name}: {len(jobs)} episodes", flush=True)
-
-    (dst_task / "meta").mkdir(parents=True, exist_ok=True)
-    for name in ("info.json", "episodes.jsonl", "tasks.jsonl",
-                 "episodes_stats.jsonl"):
-        src = src_task / "meta" / name
-        if src.is_file():
-            shutil.copy2(src, dst_task / "meta" / name)
-    if not args.no_videos:
-        link_videos(src_task, dst_task)
+    print(f"[convert] {len(tasks)} task(s), {len(jobs)} episodes", flush=True)
 
     states, actions = [], []
     done = 0

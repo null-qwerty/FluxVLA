@@ -41,7 +41,7 @@ die() { echo "ERROR: $*" >&2; exit 2; }
 if [[ -z "${TASK}" ]]; then
   die "set TASK=1|2|3 (1: LoRA+full expert on RoboCasa, 2: ego SFT then 1, 3: parallel mixed)"
 fi
-case "${TASK}" in 1|2|3|4) ;; *) die "TASK must be 1, 2, 3 or 4 (got '${TASK}')" ;; esac
+case "${TASK}" in 1|2|3|4|5) ;; *) die "TASK must be 1, 2, 3, 4 or 5 (got '${TASK}')" ;; esac
 
 # ---------------------------------------------------------------- paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,6 +65,13 @@ if [[ -z "${EGO_JSONL:-}" ]]; then
   fi
 fi
 export EGO_VLM_JSONL="${EGO_VLM_JSONL:-${EGO_JSONL}}"
+# Unified EEF action space (docs/eef_action_space.md): both datasets converted
+# offline by tools/convert_{robocasa,egodex}_to_eef.py.
+EGO_EEF_ROOT="${EGO_EEF_ROOT:-${DATA_ROOT}/egodex_eef}"
+EGO_EEF_JSONL="${EGO_EEF_JSONL:-${EGO_EEF_ROOT}/ego_eef.jsonl}"
+EGO_EEF_STATS="${EGO_EEF_STATS:-${EGO_EEF_ROOT}/stats.json}"
+ROBOCASA_EEF_DATA_ROOT="${ROBOCASA_EEF_DATA_ROOT:-${DATA_ROOT}/data/robocasa_eef_V0.1}"
+ROBOCASA_EEF_STATS="${ROBOCASA_EEF_STATS:-${ROBOCASA_EEF_DATA_ROOT}/stats.json}"
 CKPT_ROOT="${CKPT_ROOT:-${DATA_ROOT}/checkpoints}"
 PI05_CHECKPOINT="${PI05_CHECKPOINT:-${CKPT_ROOT}/pi05_base/model.safetensors}"
 PI05_TOKENIZER="${PI05_TOKENIZER:-${CKPT_ROOT}/pi05_base}"
@@ -214,6 +221,7 @@ export MASTER_ADDR
 export MASTER_PORT
 export ROBOCASA_DATA_ROOT EGO_VLM_DATA_ROOT EGO_VLM_JSONL
 export PI05_CHECKPOINT PI05_TOKENIZER VLM_INDEX_CACHE_DIR
+export EGO_EEF_ROOT EGO_EEF_JSONL EGO_EEF_STATS ROBOCASA_EEF_DATA_ROOT ROBOCASA_EEF_STATS
 export WANDB_MODE="${WANDB_MODE:-disabled}"
 export TOKENIZERS_PARALLELISM=false
 
@@ -244,22 +252,31 @@ case "${TASK}" in
       "${WORK_ROOT}/pi05_robocasa_lora_full_expert"
     ;;
   2)
-    check_file "${EGO_JSONL}" "generate it with tools/egodex_to_vlm_jsonl.py (see docs/dlc_training.md)"
-    log "stage 1/2: ego VLM SFT (${EGO_JSONL}, max_steps=${STAGE1_MAX_STEPS}, save_iter=${STAGE1_SAVE_ITER})"
+    # Unified EEF action space: ego full fine-tune -> RoboCasa VLM LoRA.
+    # See docs/eef_action_space.md and docs/dlc_training.md.
+    check_file "${EGO_EEF_JSONL}" \
+      "run tools/convert_egodex_to_eef.py --root <egodex> --out ${EGO_EEF_ROOT} --stats-out ${EGO_EEF_STATS}"
+    check_file "${EGO_EEF_STATS}" "the EgoDex EEF conversion must write stats.json"
+    check_dir "${ROBOCASA_EEF_DATA_ROOT}" \
+      "run tools/convert_robocasa_to_eef.py for all 24 task dirs into ${ROBOCASA_EEF_DATA_ROOT}"
+    check_file "${ROBOCASA_EEF_STATS}" "the RoboCasa EEF conversion must write stats.json"
+    log "stage 1/2: ego EEF full fine-tune (${EGO_EEF_JSONL}, max_steps=${STAGE1_MAX_STEPS}, save_iter=${STAGE1_SAVE_ITER})"
     RUN_MAX_STEPS="${STAGE1_MAX_STEPS}" RUN_SAVE_ITER="${STAGE1_SAVE_ITER}" run_train \
-      "configs/pi05/pi05_paligemma_egodex_vlm_sft.py" \
-      "${WORK_ROOT}/pi05_egodex_vlm_sft"
-    STAGE1_CKPT="${WORK_ROOT}/pi05_egodex_vlm_sft/checkpoints/latest-checkpoint.safetensors"
+      "configs/pi05/pi05_paligemma_egodex_eef_full_finetune.py" \
+      "${WORK_ROOT}/pi05_egodex_eef_sft"
+    STAGE1_CKPT="${WORK_ROOT}/pi05_egodex_eef_sft/checkpoints/latest-checkpoint.safetensors"
     if [[ "${DRY_RUN}" == "1" ]]; then
       log "stage 2/2 (dry-run): would export EGO_STAGE1_CHECKPOINT=${STAGE1_CKPT}"
     else
       check_file "${STAGE1_CKPT}" "stage 1 finished without writing ${STAGE1_CKPT}"
       export EGO_STAGE1_CHECKPOINT="${STAGE1_CKPT}"
-      log "stage 2/2: RoboCasa LoRA + full action expert from ${STAGE1_CKPT}"
+      log "stage 2/2: RoboCasa EEF LoRA from ${STAGE1_CKPT}"
     fi
+    # Stage 2 reads the converted (EEF) RoboCasa tree.
+    export ROBOCASA_DATA_ROOT="${ROBOCASA_EEF_DATA_ROOT}"
     run_train \
-      "configs/pi05/pi05_paligemma_robocasa_ego_vlm_mixed_lora.py" \
-      "${WORK_ROOT}/pi05_robocasa_lora_from_ego"
+      "configs/pi05/pi05_paligemma_robocasa_eef_lora.py" \
+      "${WORK_ROOT}/pi05_robocasa_eef_lora_from_ego"
     ;;
   3)
     check_file "${EGO_JSONL}" "generate it with tools/egodex_to_vlm_jsonl.py (see docs/dlc_training.md)"
@@ -273,6 +290,24 @@ case "${TASK}" in
     run_train \
       "configs/pi05/pi05_paligemma_robocasa_vlm_lora_expert_full.py" \
       "${WORK_ROOT}/pi05_robocasa_lora_vlm_expert_full"
+    ;;
+  5)
+    # Legacy joint-space serial recipe (kept for comparison with TASK 2).
+    check_file "${EGO_JSONL}" "generate it with tools/egodex_to_vlm_jsonl.py"
+    log "stage 1/2: ego VLM SFT (${EGO_JSONL}, max_steps=${STAGE1_MAX_STEPS})"
+    RUN_MAX_STEPS="${STAGE1_MAX_STEPS}" RUN_SAVE_ITER="${STAGE1_SAVE_ITER}" run_train \
+      "configs/pi05/pi05_paligemma_egodex_vlm_sft.py" \
+      "${WORK_ROOT}/pi05_egodex_vlm_sft"
+    STAGE1_CKPT="${WORK_ROOT}/pi05_egodex_vlm_sft/checkpoints/latest-checkpoint.safetensors"
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      log "stage 2/2 (dry-run): would export EGO_STAGE1_CHECKPOINT=${STAGE1_CKPT}"
+    else
+      check_file "${STAGE1_CKPT}" "stage 1 finished without writing ${STAGE1_CKPT}"
+      export EGO_STAGE1_CHECKPOINT="${STAGE1_CKPT}"
+    fi
+    run_train \
+      "configs/pi05/pi05_paligemma_robocasa_ego_vlm_mixed_lora.py" \
+      "${WORK_ROOT}/pi05_robocasa_lora_from_ego"
     ;;
 esac
 

@@ -881,8 +881,21 @@ class PadStatesAndActions:
             raise KeyError(
                 f"State key '{self.state_key}' is required for padding.")
         data[self.state_key] = self._pad_to_dim(data[self.state_key])
+        action_dim = None
         if self.action_key in data and data[self.action_key] is not None:
+            action_dim = np.asarray(data[self.action_key]).shape[-1]
             data[self.action_key] = self._pad_to_dim(data[self.action_key])
+        # A per-dimension validity mask (horizon x action_dim) must follow the
+        # action padding, otherwise the flow-matching loss sees a mask that is
+        # narrower than the padded action vector. 1D temporal masks are left
+        # untouched: they are broadcast over the action dimension by the loss.
+        mask_key = 'action_masks'
+        if (action_dim is not None and mask_key in data
+                and data[mask_key] is not None):
+            mask = np.asarray(data[mask_key])
+            if mask.ndim >= 2 and mask.shape[-1] == action_dim:
+                data[mask_key] = self._pad_to_dim(mask).astype(
+                    mask.dtype, copy=False)
         return data
 
     def _pad_to_dim(self, values: np.ndarray) -> np.ndarray:

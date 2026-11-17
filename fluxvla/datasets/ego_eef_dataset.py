@@ -1,0 +1,131 @@
+# Copyright 2026 Limx Dynamics
+"""EgoDex frame dataset in the unified EEF action space (TASK 2, stage 1).
+
+Each record (one JSONL line written by tools/convert_egodex_to_eef.py) holds:
+  image       relative path of the extracted ego frame
+  state       29D absolute EEF state [L_eef(7), L_hand(6), R_eef(7), R_hand(6), waist(3)]
+              (hands/waist are zero: EgoDex has no robot hand/waist labels)
+  actions     H x 29 EEF-delta targets (hands/waist zero)
+  action_mask 29D per-dimension validity: 1 for the 12 arm-dim EEF entries
+  task        language instruction
+
+The dataset emits the same sample keys the RoboCasa VLA pipeline produces
+(proprio / action / action_masks / images / img_masks / task_description /
+stats), so the standard NormalizeStatesAndActions -> PreparePromptWithState ->
+ProcessPrompts -> PadStatesAndActions chain applies unchanged.
+"""
+import json
+import os
+from typing import Dict, List, Optional
+
+import numpy as np
+
+from fluxvla.engines.utils import DATASETS, TRANSFORMS
+
+EFF_AR_DIMS = list(range(0, 6)) + list(range(13, 19))
+
+
+@DATASETS.register_module()
+class EgoEEFDataset:
+    """Read EgoDex EEF records produced by tools/convert_egodex_to_eef.py."""
+
+    def __init__(self,
+                 anno_json_path: str,
+                 data_root_path: Optional[str] = None,
+                 action_horizon: int = 16,
+                 statistics: Optional[Dict] = None,
+                 transforms: Optional[List] = None,
+                 task_key: str = "task",
+                 image_key: str = "image",
+                 state_key: str = "state",
+                 action_key: str = "action",
+                 action_mask_key: str = "action_mask",
+                 state_dim: int = 29,
+                 seed: int = 0,
+                 *args,
+                 **kwargs) -> None:
+        if action_horizon <= 0:
+            raise ValueError("action_horizon must be positive.")
+        self.anno_json_path = os.path.expanduser(anno_json_path)
+        self.data_root = (os.path.abspath(os.path.expanduser(data_root_path))
+                          if data_root_path else
+                          os.path.dirname(self.anno_json_path))
+        self.action_horizon = int(action_horizon)
+        self.statistics = statistics
+        self.task_key = task_key
+        self.image_key = image_key
+        self.state_key = state_key
+        self.action_key = action_key
+        self.action_mask_key = action_mask_key
+        self.state_dim = int(state_dim)
+        self.seed = int(seed)
+        self.transforms = [
+            build_transform(transform) for transform in (transforms or [])
+        ]
+        with open(self.anno_json_path, "r", encoding="utf-8") as stream:
+            self.records = [json.loads(line) for line in stream if line.strip()]
+        if not self.records:
+            raise ValueError("EgoEEFDataset annotation file is empty: "
+                             + self.anno_json_path)
+
+    def __len__(self):
+        return len(self.records)
+
+    def _load_image(self, relative_path: str) -> np.ndarray:
+        from PIL import Image
+
+        path = relative_path
+        if not os.path.isabs(path):
+            path = os.path.join(self.data_root, path)
+        with Image.open(path) as image:
+            return np.asarray(image.convert("RGB"))
+
+    def __getitem__(self, index: int) -> Dict:
+        record = self.records[index]
+        state = np.asarray(record[self.state_key], dtype=np.float32)
+        if state.shape != (self.state_dim, ):
+            raise ValueError(
+                f"{self.anno_json_path}: state shape {state.shape} "
+                f"does not match state_dim={self.state_dim}.")
+        # One EEF delta per record; the window walks forward inside the episode.
+        horizon = self.action_horizon
+        actions = np.zeros((horizon, self.state_dim), dtype=np.float32)
+        masks = np.zeros((horizon, self.state_dim), dtype=np.float32)
+        episode_id = record.get("episode_id")
+        dim_mask = np.asarray(record[self.action_mask_key], dtype=np.float32)
+        valid = 0
+        for offset in range(horizon):
+            position = index + offset
+            if position >= len(self.records):
+                break
+            neighbour = self.records[position]
+            if neighbour.get("episode_id") != episode_id:
+                break
+            actions[offset] = np.asarray(neighbour[self.action_key],
+                                         dtype=np.float32)
+            masks[offset] = dim_mask
+            valid = offset + 1
+        # Keys consumed by the shared RoboCasa VLA transform chain:
+        # NormalizeStatesAndActions reads states/actions and looks the
+        # statistics up under proprio/action.
+        sample = {
+            "states": state,
+            "actions": actions,
+            "action_masks": masks,
+            "images": [self._load_image(record[self.image_key])],
+            "img_masks": np.array([True]),
+            "task_description": record.get(self.task_key, ""),
+            "data_root": self.data_root,
+            "index": np.int64(index),
+        }
+        if self.statistics is not None:
+            sample["stats"] = self.statistics
+        for transform in self.transforms:
+            sample = transform(sample)
+        return sample
+
+
+def build_transform(cfg):
+    """Build one transform config through the FluxVLA registry."""
+    from fluxvla.engines.utils.builder import build_transform_from_cfg
+    return build_transform_from_cfg(cfg)

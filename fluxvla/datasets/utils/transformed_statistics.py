@@ -84,6 +84,15 @@ PROFILES = {
         # targets absolute.
         delta_mask=(True, ) * 7 + (False, ) + (True, ) * 7 + (False, ),
         expected_dim=16),
+    'robocasa-eef':
+    Profile(
+        state_key='observation.state',
+        action_key='action',
+        # The converter has already expressed the states as absolute EEF poses
+        # and the actions as EEF deltas; hands/waist stay absolute, so no
+        # further conversion happens in the recipe.
+        delta_mask=(),
+        expected_dim=29),
     'robocasa-joint-delta':
     Profile(
         state_key='observation.state',

@@ -73,6 +73,11 @@ HAND_JOINTS = {
         "gripper0_left_L_pinky_intermediate_joint",
     ],
 }
+ARM_JOINT_SUFFIXES = {
+    side: [name.split("robot0_", 1)[1] for name in joints]
+    for side, joints in ARM_JOINTS.items()
+}
+WAIST_JOINTS_SUFFIXES = [name.split("robot0_", 1)[1] for name in WAIST_JOINTS]
 EEF_SITES = {
     "left": "gripper0_left_grip_site",
     "right": "gripper0_right_grip_site",
@@ -256,6 +261,70 @@ class GR1Kinematics:
         self._set_qpos(joint29)
         return {side: self._pose_of("site", self.site_id[EEF_SITES[side]])
                 for side in ("left", "right")}
+
+    def arm_dof_indices(self, side):
+        """MuJoCo dof indices of one 7-joint arm."""
+        indices = []
+        for joint in ARM_JOINTS[side]:
+            jid = self.sim.model.joint_name2id(joint)
+            indices.append(int(self.sim.model.jnt_dofadr[jid]))
+        return np.asarray(indices, dtype=np.int64)
+
+    def solve_ik(self, side, target_pose_world, joint29=None, iters=60,
+                 damping=0.05, step_clip=0.15, tol=1e-6):
+        """Damped least-squares IK for one 7-DOF arm.
+
+        Args:
+            side: 'left' or 'right'.
+            target_pose_world: (R, t) world-frame EEF pose to reach.
+            joint29: starting 29D joint vector (defaults to zeros).
+        Returns:
+            tuple(updated 29D joint vector, final 6D pose residual, iterations)
+        """
+        import mujoco
+
+        joint29 = (np.zeros(29) if joint29 is None
+                   else np.asarray(joint29, dtype=np.float64).copy())
+        target_r, target_t = target_pose_world
+        arm_columns = self.arm_dof_indices(side)
+        site = self.site_id[EEF_SITES[side]]
+        self._set_qpos(joint29)
+        model = self.sim.model._model
+        data = self.sim.data._data
+        jacp = np.zeros((3, model.nv))
+        jacr = np.zeros((3, model.nv))
+        residual = np.zeros(6)
+        for iteration in range(1, iters + 1):
+            current_r, current_t = self._pose_of("site", site)
+            dp = target_t - current_t
+            rot_error = target_r @ current_r.T
+            dr = mat_to_rotvec(rot_error)
+            residual = np.concatenate([dp, dr])
+            if np.linalg.norm(residual) < tol:
+                break
+            mujoco.mj_jacSite(model, data, jacp, jacr, site)
+            jacobian = np.vstack([jacp, jacr])[:, arm_columns]
+            # Damped least squares: dq = J^T (J J^T + lambda^2 I)^-1 e
+            normal = jacobian @ jacobian.T + (damping ** 2) * np.eye(6)
+            dq = jacobian.T @ np.linalg.solve(normal, residual)
+            dq = np.clip(dq, -step_clip, step_clip)
+            for local, joint in enumerate(ARM_JOINTS[side]):
+                joint29[self._joint29_index(joint)] += dq[local]
+            self._set_qpos(joint29)
+        return joint29, residual, iteration
+
+    def _joint29_index(self, joint_name):
+        prefix = "robot0_"
+        short = joint_name[len(prefix):] if joint_name.startswith(prefix) else joint_name
+        for name, start, end in LAYOUT:
+            if name == "waist" and short in WAIST_JOINTS_SUFFIXES:
+                return start + WAIST_JOINTS_SUFFIXES.index(short)
+            if name.endswith("_arm"):
+                side = name.split("_")[0]
+                suffixes = ARM_JOINT_SUFFIXES[side]
+                if short in suffixes:
+                    return start + suffixes.index(short)
+        raise KeyError(joint_name)
 
     def state_and_eef(self, joint29):
         """Return camera pose + EEF poses (world) for one 29D joint vector."""

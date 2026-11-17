@@ -22,7 +22,8 @@
 | 3 | 并行混训（RoboCasa VLA : ego VLM = 3:1） | `pi05_paligemma_robocasa_ego_vlm_mixed_full_finetune.py` | `pi05_robocasa_ego_mixed` |
 | 4 | VLM LoRA + **action expert 全量**，100k 步、lr 2.5e-5 / warmup 5000（对齐官方 51.42% 配方） | `pi05_paligemma_robocasa_vlm_lora_expert_full.py` | `pi05_robocasa_lora_vlm_expert_full` |
 
-TASK 1 不需要 ego 数据；TASK 2/3 需要 `DATA_ROOT/egodex_vlm/ego.jsonl`（见第 2 节）。
+TASK 1 不需要 ego 数据；TASK 3/5 需要 `DATA_ROOT/egodex_vlm/ego.jsonl`（见第 2 节）；
+TASK 2 需要 EEF 转换后的 ego + RoboCasa 数据（见第 2.3 节）。
 
 ## 2. 一次性准备（已经做完，换机器时照做）
 
@@ -33,7 +34,18 @@ export DATA=/mnt/data/cpfs/users/neri
 mkdir -p $DATA/checkpoints
 cp -r /mnt/data/cpfs/users/eira/checkpoints/pi05_base $DATA/checkpoints/pi05_base   # model.safetensors + tokenizer.model
 
-# 2.2 ego.jsonl + 抽帧（TASK 2/3 才需要；16 进程约 20-40 分钟）
+# 2.3 统一 EEF 数据（TASK 2 才需要）
+# robot 侧：24 个任务目录 -> ROBOCASA_EEF_DATA_ROOT（parquet 约 4GB，videos 用 symlink）
+#   python tools/convert_robocasa_to_eef.py \
+#     --src $DATA_ROOT/data/robocasa_lerobot_V2.1 \
+#     --dst $DATA_ROOT/data/robocasa_eef_V0.1 --workers 16 \
+#     --stats-out $DATA_ROOT/data/robocasa_eef_V0.1/stats.json
+# ego 侧：EgoDex hdf5 -> EGO_EEF_ROOT（jsonl + 抽帧图像，20Hz）
+#   python tools/convert_egodex_to_eef.py --root $DATA_ROOT/data/egodex \
+#     --out $DATA_ROOT/egodex_eef --fps-sample 20 --max-episodes 20 \
+#     --stats-out $DATA_ROOT/egodex_eef/stats.json
+
+# 2.2 ego.jsonl + 抽帧（TASK 3/5 才需要；16 进程约 20-40 分钟）
 # 生成后在同一台机器（数据机）上写 manifest，供每节点 preflight 校验数据一致性：
 # python tools/write_annotation_manifest.py <out>/ego.jsonl \
 #                                               <out>/ego_train.jsonl <out>/ego_val.jsonl
@@ -218,7 +230,10 @@ $DATA_ROOT/work_dirs/eval_runs/<run>_<ts>/
 
 - TASK 1 是「纯 RoboCasa 数据 + LoRA 微调」的基线（无 ego，40k 步）。
 - TASK 3 是「ego 与 RoboCasa 同时进 batch」的并行混训。
-- TASK 2 是「ego 先改 VLM，再在 RoboCasa 上 LoRA」的串行方案。
+- TASK 2 是**统一 EEF 动作空间**的串行方案（见 `docs/eef_action_space.md`）：
+  ego 数据（相机系绝对 EEF + delta EEF）全量微调 → RoboCasa 数据 VLM LoRA；
+  手/腰部维度保留 robot 关节空间，ego 样本用逐维 action mask 只监督手臂。
+- TASK 5 是旧的关节空间串行方案（ego VLM SFT → RoboCasa 关节 LoRA），保留作对照。
 - TASK 4 是 TASK 1 的修正版：VLM 仍用 LoRA，但 **action expert 全量训练**，步数/LR/预热
   对齐官方发布配方（`pi05_paligemma_robocasa_full_data_full_finetune_bs256`，24×50 评测 51.42%）。
 - 三者（1/2/3）步数预算一致（40k updates、global 256），可直接比较 24×50 的成功率；
@@ -277,6 +292,7 @@ DLC 自定义任务请使用下面这个镜像（**纯环境镜像，不含项�
 limx-shanghai-registry.cn-shanghai.cr.aliyuncs.com/limx_emb/fluxvla_env:ubuntu24.04-py3.10-cu128-pytorch2.8-0.0.3
 ```
 
+- digest: `sha256:deddc65758274c05636614e5c9039d9d75792c5b5a04d9890f45ced76d23f7ad`
 - 0.0.3 起镜像只装环境：torch / robosuite / robocasa / Isaac-GR00T / flash-attn /
   mmengine / protobuf 3.20.3 等；**不包含** FluxVLA 的 `fluxvla/`、`configs/`、`scripts/`、
   `tools/`，也不做 editable 安装
