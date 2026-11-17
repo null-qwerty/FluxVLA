@@ -67,7 +67,7 @@ fi
 export EGO_VLM_JSONL="${EGO_VLM_JSONL:-${EGO_JSONL}}"
 # Unified EEF action space (docs/eef_action_space.md): both datasets converted
 # offline by tools/convert_{robocasa,egodex}_to_eef.py.
-EGO_EEF_ROOT="${EGO_EEF_ROOT:-${DATA_ROOT}/egodex_eef}"
+EGO_EEF_ROOT="${EGO_EEF_ROOT:-${DATA_ROOT}/egodex_eef_v1}"
 EGO_EEF_JSONL="${EGO_EEF_JSONL:-${EGO_EEF_ROOT}/ego_eef.jsonl}"
 EGO_EEF_STATS="${EGO_EEF_STATS:-${EGO_EEF_ROOT}/stats.json}"
 ROBOCASA_EEF_DATA_ROOT="${ROBOCASA_EEF_DATA_ROOT:-${DATA_ROOT}/data/robocasa_eef_V0.1}"

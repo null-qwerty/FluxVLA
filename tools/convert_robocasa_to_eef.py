@@ -144,6 +144,8 @@ def main(argv=None):
     parser.add_argument("--stats-out", default=None,
                         help="write EEF statistics json here")
     parser.add_argument("--no-videos", action="store_true")
+    parser.add_argument("--episode-list", default=None,
+                        help="optional <task> <episode> list file (subset)")
     args = parser.parse_args(argv)
 
     src_path = Path(args.src)
@@ -157,11 +159,26 @@ def main(argv=None):
     if not tasks:
         raise SystemExit(f"no task directories under {src_path}")
 
+    allowed = None
+    if args.episode_list:
+        allowed = set()
+        with open(args.episode_list, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                task_name, episode = line.split()
+                allowed.add((task_name, episode))
+
     jobs = []
     for src_task in tasks:
         dst_task = dst_path / src_task.name if len(tasks) > 1 else dst_path
         for chunk in sorted((src_task / "data").iterdir()):
             for parquet in sorted(chunk.glob("*.parquet")):
+                if allowed is not None:
+                    episode = parquet.stem.replace("episode_", "")
+                    if (src_task.name, episode) not in allowed:
+                        continue
                 rel = parquet.relative_to(src_task)
                 jobs.append((str(parquet), str(dst_task / rel)))
         (dst_task / "meta").mkdir(parents=True, exist_ok=True)
