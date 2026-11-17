@@ -36,10 +36,13 @@ _datasets.data_root_path = [
     '{}/{}'.format(_EEF_ROOT, os.path.basename(path))
     for path in _datasets.data_root_path
 ]
+# Both the balanced wrapper and the inner ParquetDataset resolve the
+# statistic name, so point both at the EEF statistics.
 _base_.train_dataloader.dataset.statistic_name = _EEF_STAT_NAME
 _base_.train_dataloader.dataset.dataset_statistics = {
     _EEF_STAT_NAME: _EEF_STATS,
 }
+_datasets.statistic_name = _EEF_STAT_NAME
 
 # Actions are already deltas and the new space is normalized with mean_std.
 _transforms = _datasets.transforms
