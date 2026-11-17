@@ -355,7 +355,7 @@ ego 只有腕部标签，因此阶段 1 用逐维 `action_masks` 只监督 12 �
 
 ```text
 $DATA_ROOT/data/robocasa_eef_V0.1/     # 24 任务转换后 parquet（videos 软链到原始 robocasa_lerobot_V2.1）
-$DATA_ROOT/egodex_eef/                # ego_eef.jsonl + images/ + stats.json
+$DATA_ROOT/egodex_eef_v1/             # ego_eef.jsonl + images/<task>.tar + stats.json
 ```
 
 重新生成：
@@ -369,7 +369,7 @@ python tools/convert_robocasa_to_eef.py \
 
 # ego 侧（hdf5 + mp4 抽帧，建议写到节点本地再同步回 CPFS）
 python tools/convert_egodex_to_eef.py --root $DATA_ROOT/data/egodex \
-  --out /tmp/egodex_eef --fps-sample 20 --max-episodes 0 --image-max-side 256 \
+  --out /tmp/egodex_eef --fps-sample 20 --max-episodes 6 --image-max-side 256 \
   --workers 16 --stats-out /tmp/egodex_eef/stats.json
 rsync -a /tmp/egodex_eef/ $DATA_ROOT/egodex_eef/
 ```
