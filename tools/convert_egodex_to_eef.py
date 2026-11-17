@@ -141,19 +141,36 @@ def convert_episode(job):
 
     image_dir = Path(out_dir) / "images" / task / str(episode_id)
     image_dir.mkdir(parents=True, exist_ok=True)
-    # Stream the video once and save only the requested frames.
-    import imageio.v3 as iio
+    # One ffmpeg pass per episode (fps filter + scale) is far faster than a
+    # Python per-frame loop, which dominated the wall clock for EgoDex's 69 GB
+    # of 1080p videos. Output frame k corresponds to source frame
+    # round(k * ego_fps / fps_sample), matching the index grid above.
+    import subprocess
 
-    wanted = {int(idx): slot for slot, idx in enumerate(indices)}
+    ffmpeg = "ffmpeg"
+    try:
+        import imageio_ffmpeg
+
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001 - system ffmpeg fallback
+        pass
+    raw_dir = image_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-i", video_path,
+        "-vf", f"fps={args.fps_sample:g},scale={args.image_max_side}:-2",
+        "-q:v", "3", str(raw_dir / "f_%05d.jpg"),
+    ]
+    subprocess.run(command, check=True)
+    files = sorted(raw_dir.glob("f_*.jpg"))
     images = [None] * len(indices)
-    for frame_idx, frame in enumerate(iio.imiter(video_path)):
-        slot = wanted.get(frame_idx)
-        if slot is not None:
-            path = image_dir / f"frame_{slot:05d}.jpg"
-            resize_save(frame, path, args.image_max_side)
-            images[slot] = str(path.relative_to(out_dir))
-        if frame_idx >= int(indices[-1]):
-            break
+    for slot in range(min(len(files), len(indices))):
+        destination = image_dir / f"frame_{slot:05d}.jpg"
+        os.replace(files[slot], destination)
+        images[slot] = str(destination.relative_to(out_dir))
+    for leftover in files[len(images):]:
+        leftover.unlink()
+    raw_dir.rmdir()
 
     description = str(task)
     records = []

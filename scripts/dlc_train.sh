@@ -129,8 +129,8 @@ NUM_WORKERS="${NUM_WORKERS:-4}"
 SAVE_ITER="${SAVE_ITER:-1000}"
 # Stage 1 (ego VLM SFT) has 4.1k samples and ~17 steps per epoch: loss is
 # already memorised by ~150 steps, so 40k steps is 2300 epochs of overfitting.
-STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-300}"
-STAGE1_SAVE_ITER="${STAGE1_SAVE_ITER:-100}"
+STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-20000}"
+STAGE1_SAVE_ITER="${STAGE1_SAVE_ITER:-1000}"
 
 MICRO=$((PER_DEVICE_BS * TOTAL_GPUS))
 GA=$(( (TARGET_GLOBAL_BS + MICRO - 1) / MICRO ))

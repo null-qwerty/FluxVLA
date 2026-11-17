@@ -339,3 +339,74 @@ TASK=1 MAX_STEPS=20 bash scripts/dlc_train.sh
 # --cfg-options runner.keep_params_fp32=False model.preserve_fp32_residuals=False \
 #   model.vision_backbone.openpi_stem_fp32=False model.openpi_fp32_flow=False
 ```
+## 11. TASK 2：统一 EEF 动作空间（ego 全量微调 → RoboCasa LoRA）
+
+动作空间（`docs/eef_action_space.md`）：
+
+```text
+state  (29): [L_eef_abs(7), L_hand(6), R_eef_abs(7), R_hand(6), waist(3)]   # 输入绝对 EEF（相机系）
+action (29): [L_eef_delta(6), L_hand(6), R_eef_delta(6), R_hand(6), waist(3)] # 输出 delta EEF
+```
+
+ego 只有腕部标签，因此阶段 1 用逐维 `action_masks` 只监督 12 个手臂维度；
+手部/腰部在阶段 2 由 RoboCasa 数据监督。
+
+### 11.1 数据准备（已在本仓库同一台 CPFS 上完成）
+
+```text
+$DATA_ROOT/data/robocasa_eef_V0.1/     # 24 任务转换后 parquet（videos 软链到原始 robocasa_lerobot_V2.1）
+$DATA_ROOT/egodex_eef/                # ego_eef.jsonl + images/ + stats.json
+```
+
+重新生成：
+
+```bash
+# robot 侧（CPU + mujoco，无需 RoboCasa 资产）
+python tools/convert_robocasa_to_eef.py \
+  --src $DATA_ROOT/data/robocasa_lerobot_V2.1 \
+  --dst $DATA_ROOT/data/robocasa_eef_V0.1 --workers 16 \
+  --stats-out $DATA_ROOT/data/robocasa_eef_V0.1/stats.json
+
+# ego 侧（hdf5 + mp4 抽帧，建议写到节点本地再同步回 CPFS）
+python tools/convert_egodex_to_eef.py --root $DATA_ROOT/data/egodex \
+  --out /tmp/egodex_eef --fps-sample 20 --max-episodes 0 --image-max-side 256 \
+  --workers 16 --stats-out /tmp/egodex_eef/stats.json
+rsync -a /tmp/egodex_eef/ $DATA_ROOT/egodex_eef/
+```
+
+### 11.2 DLC 启动
+
+```bash
+# 冒烟（20 步，约 10 分钟）
+TASK=2 MAX_STEPS=20 STAGE1_MAX_STEPS=20 STAGE1_SAVE_ITER=20 bash scripts/dlc_train.sh
+
+# 正式训练：阶段 1 ego 20k 步全量微调 -> 阶段 2 RoboCasa 40k 步 LoRA
+TASK=2 bash scripts/dlc_train.sh
+```
+
+可选覆盖：`PER_DEVICE_BS`、`TARGET_GLOBAL_BS`、`STAGE1_MAX_STEPS`、`MAX_STEPS`、
+`EGO_EEF_ROOT`/`EGO_EEF_JSONL`/`EGO_EEF_STATS`、`ROBOCASA_EEF_DATA_ROOT`/`ROBOCASA_EEF_STATS`。
+
+### 11.3 跨机房数据同步（pro5000 ↔ 算力中心）
+
+算力中心 DLC 挂载的是上海 CPFS `/mnt/data/cpfs/users/neri`，本仓库的转换结果是
+**直接写 CPFS**（本地/pro5000 转换 → rsync 到 data_process 的 CPFS 挂载点）。
+若需要在 pro5000 上处理再同步：
+
+```bash
+# pro5000 上转换（有自己的 CPFS/数据），完成后推到 OSS
+ossutil cp -r /mnt/data/cpfs/mnt/data/<user>/robocasa_eef_V0.1 oss://<bucket>/users/neri/data/robocasa_eef_V0.1
+
+# data_process（上海）从 OSS 拉到 CPFS，DLC 即可直接读
+ossutil cp -r oss://<bucket>/users/neri/data/robocasa_eef_V0.1 /mnt/data/cpfs/users/neri/data/robocasa_eef_V0.1
+```
+
+### 11.4 已验证 / 待验证
+
+| 项 | 结果 |
+|---|---|
+| Gate1：joint → EEF → DLS IK → joint | MAE 0.011–0.013 rad（≈0.6–0.75°），位姿残差 ~1e-7 |
+| stage2 EEF 训练 smoke（本机 3090，2 步） | Loss 1.9842，checkpoint 正常保存 |
+| stage1 ego 数据集构建 | 76 帧/集（20Hz），states 32D、actions (16,32)、mask 精确命中 12 个手臂维度 |
+| 全量转换 | 24 任务 11,234 episode / 3.35M 帧，stats.json 已生成 |
+| 评测适配器（EEF→关节 注入 robocasa_eval_runner） | ⏳ 下一步（IK/坐标变换已验证，仅剩管线接入） |
