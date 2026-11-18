@@ -197,9 +197,10 @@ class EgoEEFDataset:
             "images": [self._load_image(record)],
             "img_masks": np.array([True]),
             "task_description": record.get(self.task_key, ""),
-            "data_root": self.data_root,
-            "index": np.int64(index),
         }
+        # No data_root/index key: the DictCollator only accepts the keys and
+        # meta_keys of the config, and nothing in the EEF transform chain needs
+        # them (frames are decoded here, not by a video transform).
         if self.statistics is not None:
             sample["stats"] = self.statistics
         for transform in self.transforms:
