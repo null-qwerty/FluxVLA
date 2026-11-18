@@ -54,6 +54,8 @@ EGO_VLM_DATA_ROOT="${EGO_VLM_DATA_ROOT:-${DATA_ROOT}/egodex_vlm}"
 # Byte-offset index for the JSONL annotations: node-local, so the ranks of a
 # job do not share one CPFS index file (and its fingerprint) across nodes.
 VLM_INDEX_CACHE_DIR="${VLM_INDEX_CACHE_DIR:-/tmp/fluxvla_vlm_index}"
+# Same reasoning for the EgoDex EEF rows: one shared node-local row index.
+EGO_EEF_INDEX_CACHE_DIR="${EGO_EEF_INDEX_CACHE_DIR:-/tmp/fluxvla_ego_eef_index}"
 # Prefer an episode/task split produced by tools/split_egodex_vlm_jsonl.py so
 # the SFT stream never sees validation frames; fall back to the single file.
 EGO_TRAIN_JSONL="${EGO_TRAIN_JSONL:-${EGO_VLM_DATA_ROOT}/ego_train.jsonl}"
@@ -220,7 +222,7 @@ export RANK="${NODE_RANK}"
 export MASTER_ADDR
 export MASTER_PORT
 export ROBOCASA_DATA_ROOT EGO_VLM_DATA_ROOT EGO_VLM_JSONL
-export PI05_CHECKPOINT PI05_TOKENIZER VLM_INDEX_CACHE_DIR
+export PI05_CHECKPOINT PI05_TOKENIZER VLM_INDEX_CACHE_DIR EGO_EEF_INDEX_CACHE_DIR
 export EGO_EEF_ROOT EGO_EEF_JSONL EGO_EEF_STATS ROBOCASA_EEF_DATA_ROOT ROBOCASA_EEF_STATS
 export WANDB_MODE="${WANDB_MODE:-disabled}"
 export TOKENIZERS_PARALLELISM=false

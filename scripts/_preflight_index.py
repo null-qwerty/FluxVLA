@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import time
 
 from mmengine import Config
@@ -71,6 +72,36 @@ def _jsonl_sources(dataset):
             source = source.get('path')
         if isinstance(source, str) and source.lower().endswith('.jsonl'):
             yield source
+
+
+def _is_vlm_annotation(path):
+    """Whether the first record is a LLaVA/VLM annotation (not e.g. EEF rows).
+
+    Not every JSONL dataset is an annotation source: the EgoDex EEF records
+    (TASK 2, stage 1) store state/actions and would fail the conversations/
+    messages schema check. Sniff the first record instead of guessing from the
+    dataset class name.
+    """
+    try:
+        with open(path, 'r', encoding='utf-8') as stream:
+            first = stream.readline()
+    except OSError:
+        return True  # let the missing-file check report it
+    if not first.strip():
+        return True
+    try:
+        record = json.loads(first)
+    except ValueError:
+        return True
+    return isinstance(record, dict) and any(
+        key in record for key in ('conversations', 'messages'))
+
+
+def _ego_index_cache_dir():
+    cache = os.environ.get('EGO_EEF_INDEX_CACHE_DIR')
+    if cache:
+        return os.path.expanduser(cache)
+    return os.path.join(tempfile.gettempdir(), 'fluxvla_ego_eef_index')
 
 
 def _sha256(path):
@@ -117,13 +148,29 @@ def main(config_path: str) -> int:
     for stream_name, dataset in _dataset_streams(cfg):
         cache_dir = _resolve_cache_dir(dataset)
         for source in _jsonl_sources(dataset):
-            jobs.append((stream_name, os.path.expanduser(source), cache_dir))
+            path = os.path.expanduser(source)
+            is_vlm = _is_vlm_annotation(path)
+            if not is_vlm:
+                # RoboCasa/EgoDex EEF rows live in JSONL too; they are read by
+                # their own dataset class and are not LLaVA annotations.
+                cache_dir = _ego_index_cache_dir()
+            jobs.append((stream_name, path, cache_dir, is_vlm))
     if not jobs:
         print('[preflight-index] no JSONL annotation sources')
         return 0
-    print(f'[preflight-index] JSONL sources: {len(jobs)}')
+    vlm_count = sum(1 for job in jobs if job[3])
+    print(f'[preflight-index] JSONL sources: {len(jobs)} '
+          f'(vlm annotations: {vlm_count})')
+    if vlm_count == 0:
+        print('[preflight-index] no VLM annotation sources')
 
-    for stream_name, path, _ in jobs:
+    vlm_jobs = [job for job in jobs if job[3]]
+    other_jobs = [job for job in jobs if not job[3]]
+    for stream_name, path, _, _ in other_jobs:
+        print(f'[preflight-index] not a VLM annotation source, skipping the '
+              f'annotation checks: {path}')
+
+    for stream_name, path, _, _ in vlm_jobs:
         if not os.path.isfile(path):
             print(f'[preflight-index] missing annotation: {path}', file=sys.stderr)
             return 8
@@ -148,13 +195,13 @@ def main(config_path: str) -> int:
         print(f'[preflight-index] skip index warm-up ({error})')
         return 0
 
-    for stream_name, path, cache_dir in jobs:
+    def warm(stream_name, path, cache_dir, validate):
         for attempt in range(1, RETRIES + 1):
             try:
-                index = IndexedJSONL(path, cache_dir)
+                index = IndexedJSONL(path, cache_dir, validate=validate)
                 print(f'[preflight-index] {stream_name}: {path} '
                       f'rows={len(index)} cache={cache_dir or "default"}')
-                break
+                return 0
             except RuntimeError as error:
                 if attempt == RETRIES:
                     print(f'[preflight-index] {path}: {error}', file=sys.stderr)
@@ -163,6 +210,22 @@ def main(config_path: str) -> int:
                       f'(attempt {attempt}/{RETRIES}, waiting {SLEEP:g}s)',
                       file=sys.stderr)
                 time.sleep(SLEEP)
+        return 8
+
+    for stream_name, path, cache_dir, _ in vlm_jobs:
+        code = warm(stream_name, path, cache_dir, None)
+        if code:
+            return code
+    # The EEF records have their own schema; index them so the dataloader
+    # workers do not each build the index.
+    for stream_name, path, cache_dir, _ in other_jobs:
+        if not os.path.isfile(path):
+            print(f'[preflight-index] missing annotation: {path}',
+                  file=sys.stderr)
+            return 8
+        code = warm(stream_name, path, cache_dir, lambda item: item)
+        if code:
+            return code
     print('[preflight-index] ok')
     return 0
 

@@ -15,14 +15,26 @@ stats), so the standard NormalizeStatesAndActions -> PreparePromptWithState ->
 ProcessPrompts -> PadStatesAndActions chain applies unchanged.
 """
 import json
+import logging
 import os
+import tempfile
 from typing import Dict, List, Optional
 
 import numpy as np
 
+from fluxvla.datasets.utils.vlm_annotations import IndexedJSONL
 from fluxvla.engines.utils import DATASETS, TRANSFORMS
 
+logger = logging.getLogger(__name__)
+
 EFF_AR_DIMS = list(range(0, 6)) + list(range(13, 19))
+
+
+def _check_eef_record(item):
+    """Record schema of the files written by tools/convert_egodex_to_eef.py."""
+    if not isinstance(item, dict) or "state" not in item or "action" not in item:
+        raise ValueError("Expected an EgoDex EEF record (state/action).")
+    return item
 
 
 @DATASETS.register_module()
@@ -62,14 +74,39 @@ class EgoEEFDataset:
         self.transforms = [
             build_transform(transform) for transform in (transforms or [])
         ]
-        with open(self.anno_json_path, "r", encoding="utf-8") as stream:
-            self.records = [json.loads(line) for line in stream if line.strip()]
-        if not self.records:
+        # 192k records x ~1.5 KB would cost several GB per dataloader worker
+        # (4 workers x N ranks on one node). Index the file once instead and
+        # read single rows with pread; the index is shared through the node
+        # local cache dir, so worker startup stays constant.
+        self._index = None
+        cache_dir = os.environ.get("EGO_EEF_INDEX_CACHE_DIR",
+                                   os.path.join(tempfile.gettempdir(),
+                                                "fluxvla_ego_eef_index"))
+        try:
+            self._index = IndexedJSONL(self.anno_json_path,
+                                       cache_dir,
+                                       validate=_check_eef_record)
+        except Exception as error:  # pragma: no cover - unusual cache failures
+            logger.warning("falling back to an in-memory index for %s: %s",
+                           self.anno_json_path, error)
+            with open(self.anno_json_path, "r", encoding="utf-8") as stream:
+                self.records = [
+                    _check_eef_record(json.loads(line)) for line in stream
+                    if line.strip()
+                ]
+        if len(self) == 0:
             raise ValueError("EgoEEFDataset annotation file is empty: "
                              + self.anno_json_path)
 
     def __len__(self):
-        return len(self.records)
+        total = len(self._index) if self._index is not None else len(
+            self.records)
+        return total
+
+    def _record(self, index: int) -> Dict:
+        if self._index is not None:
+            return self._index[index]
+        return self.records[index]
 
     def _load_image(self, record: Dict) -> np.ndarray:
         import io
@@ -104,7 +141,7 @@ class EgoEEFDataset:
             return np.asarray(image.convert("RGB"))
 
     def __getitem__(self, index: int) -> Dict:
-        record = self.records[index]
+        record = self._record(index)
         state = np.asarray(record[self.state_key], dtype=np.float32)
         if state.shape != (self.state_dim, ):
             raise ValueError(
@@ -119,9 +156,9 @@ class EgoEEFDataset:
         valid = 0
         for offset in range(horizon):
             position = index + offset
-            if position >= len(self.records):
+            if position >= len(self):
                 break
-            neighbour = self.records[position]
+            neighbour = self._record(position)
             if neighbour.get("episode_id") != episode_id:
                 break
             actions[offset] = np.asarray(neighbour[self.action_key],

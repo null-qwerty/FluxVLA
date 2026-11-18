@@ -211,7 +211,11 @@ class IndexedJSONL(Sequence):
     _magic = _MAGIC
     _index_suffix = '.idx'
 
-    def __init__(self, path, cache_dir=None):
+    def __init__(self, path, cache_dir=None, validate=None):
+        # `validate` lets other JSONL datasets (e.g. the EgoDex EEF records,
+        # which carry state/actions instead of conversations) reuse the same
+        # byte-offset index: same file format, different record schema.
+        self._validate = validate or _check_record
         self._fd = self._mapping = self._pid = None
         self.path = str(Path(path).expanduser().resolve())
         self.fingerprint = _fingerprint(self.path)
@@ -246,7 +250,7 @@ class IndexedJSONL(Sequence):
             for line_number, line in enumerate(source, 1):
                 if line.strip():
                     try:
-                        _check_record(json.loads(line))
+                        self._validate(json.loads(line))
                     except ValueError as error:
                         raise ValueError(
                             f'{self.path}:{line_number}: {error}') from error
@@ -296,7 +300,7 @@ class IndexedJSONL(Sequence):
             self._pid = os.getpid()
         offset, length = _ENTRY.unpack_from(self._mapping,
                                             _HEADER.size + index * _ENTRY.size)
-        return _check_record(json.loads(os.pread(self._fd, length, offset)))
+        return self._validate(json.loads(os.pread(self._fd, length, offset)))
 
     def close(self):
         if self._fd is not None:
