@@ -97,6 +97,28 @@ class EgoEEFDataset:
         if len(self) == 0:
             raise ValueError("EgoEEFDataset annotation file is empty: "
                              + self.anno_json_path)
+        self._check_first_image()
+
+    def _check_first_image(self) -> None:
+        """Fail at construction with an actionable message, not inside a worker.
+
+        Records store the frame location relative to data_root_path
+        ("images/<task>.tar"), so a wrong root only shows up when the first
+        batch is fetched - far from the configuration mistake that caused it.
+        """
+        record = self._record(0)
+        relative = record.get("image_pack", record.get(self.image_key))
+        if relative is None:
+            raise ValueError(f"{self.anno_json_path}: first record has no "
+                             f"{self.image_key}/image_pack field.")
+        path = (relative if os.path.isabs(relative) else
+                os.path.join(self.data_root, relative))
+        if not os.path.exists(path):
+            raise ValueError(
+                f"{self.anno_json_path}: first frame is missing: {path} "
+                f"(data_root_path={self.data_root}). Point EGO_EEF_ROOT at the "
+                "directory produced by tools/convert_egodex_to_eef.py, e.g. "
+                "$DATA_ROOT/egodex_eef_v1.")
 
     def __len__(self):
         total = len(self._index) if self._index is not None else len(

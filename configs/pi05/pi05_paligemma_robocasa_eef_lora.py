@@ -23,8 +23,8 @@ import os
 
 _base_ = './pi05_paligemma_robocasa_ego_vlm_mixed_lora.py'
 
-_EEF_ROOT = os.environ.get('ROBOCASA_EEF_DATA_ROOT',
-                           './datasets/robocasa_eef_V0.1')
+_EEF_ROOT = os.path.abspath(
+    os.environ.get('ROBOCASA_EEF_DATA_ROOT', './datasets/robocasa_eef_V0.1'))
 _EEF_STATS_PATH = os.environ.get('ROBOCASA_EEF_STATS',
                                 _EEF_ROOT + '/stats.json')
 _EEF_STATS = json.loads(open(_EEF_STATS_PATH).read())

@@ -12,9 +12,10 @@ EgoDex only labels the two wrist poses, so the per-dimension action mask keeps
 the 12 arm EEF dimensions and masks the hand/waist dimensions out of the flow
 matching loss (pi0/pi05 reduce_action_bc_loss honours action_masks).
 
-Environment:
-  EGO_EEF_DATA_ROOT   output directory of tools/convert_egodex_to_eef.py
-                      (default $DATA_ROOT/egodex_eef)
+Environment (names are set by scripts/dlc_train.sh):
+  EGO_EEF_ROOT        output directory of tools/convert_egodex_to_eef.py
+                      (EGO_EEF_DATA_ROOT is accepted as an alias)
+  EGO_EEF_JSONL       annotation file (default <root>/ego_eef.jsonl)
   EGO_EEF_STATS       statistics json produced by the same tool
                       (default <root>/stats.json)
 """
@@ -23,7 +24,13 @@ import os
 
 _base_ = './pi05_paligemma_robocasa_full_data_full_finetune.py'
 
-_EGO_EEF_ROOT = os.environ.get('EGO_EEF_DATA_ROOT', './datasets/egodex_eef')
+# The launcher exports EGO_EEF_ROOT; EGO_EEF_DATA_ROOT is the older alias and
+# kept for manual runs. Resolve now: the dataset joins the record paths
+# ("images/<task>.tar") against this root, so a relative fallback silently
+# pointed at <cwd>/datasets/egodex_eef instead of the converted data.
+_EGO_EEF_ROOT = os.path.abspath(
+    os.environ.get('EGO_EEF_ROOT')
+    or os.environ.get('EGO_EEF_DATA_ROOT', './datasets/egodex_eef'))
 _EGO_EEF_JSONL = os.environ.get('EGO_EEF_JSONL',
                                   _EGO_EEF_ROOT + '/ego_eef.jsonl')
 _EGO_EEF_STATS_PATH = os.environ.get('EGO_EEF_STATS',
