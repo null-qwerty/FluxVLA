@@ -230,6 +230,17 @@ check_file "${PI05_CHECKPOINT}" "put the Pi0.5 base checkpoint at ${CKPT_ROOT}/p
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 command -v "${PYTHON_BIN}" >/dev/null 2>&1 || PYTHON_BIN="python3"
+# The wheel must land in the interpreter torchrun will use for scripts/train.py,
+# otherwise the install is invisible to the training ranks. torchrun is a
+# console script, so its shebang names that interpreter.
+if TORCHRUN_BIN="$(command -v torchrun 2>/dev/null)"; then
+  TORCHRUN_PY="$(sed -n '1s/^#![[:space:]]*//p' "${TORCHRUN_BIN}" 2>/dev/null || true)"
+  if [[ "${TORCHRUN_PY}" == */python* && -x "${TORCHRUN_PY}" && "${TORCHRUN_PY}" != "$(command -v "${PYTHON_BIN}")" ]]; then
+    log "aligning python with the torchrun interpreter: ${TORCHRUN_PY}"
+    PYTHON_BIN="${TORCHRUN_PY}"
+  fi
+fi
+export PYTHON_BIN
 log "python: $(command -v "${PYTHON_BIN}") $("${PYTHON_BIN}" -V 2>&1)"
 if [[ "${DRY_RUN}" != "1" ]]; then
   if ! "${PYTHON_BIN}" -c "import torch" >/dev/null 2>&1; then
@@ -240,8 +251,30 @@ if [[ "${DRY_RUN}" != "1" ]]; then
   fi
   # The image is environment-only: install the project wheel for this node GPU.
   bash scripts/install_project.sh
-  if ! "${PYTHON_BIN}" -c "import fluxvla" >/dev/null 2>&1; then
-    die "fluxvla is not importable after scripts/install_project.sh"
+  # Import from a neutral directory: `python -c` puts the CWD on sys.path, so
+  # from the repo root this would be satisfied by the source tree while the
+  # torchrun ranks (sys.path[0] = scripts/) still see no installed package.
+  if ! ( cd /tmp && "${PYTHON_BIN}" -c "import fluxvla" ) >/dev/null 2>&1; then
+    {
+      echo "[dlc] fluxvla import diagnostics"
+      ( cd /tmp && "${PYTHON_BIN}" - <<'PY' || true
+import importlib.metadata as md
+import site
+import sys
+
+print('  python      :', sys.executable)
+print('  site-packages:', site.getsitepackages())
+try:
+    dist = md.distribution('fluxvla')
+    print('  fluxvla dist:', dist.version, dist._path)
+except md.PackageNotFoundError:
+    print('  fluxvla dist: NOT INSTALLED')
+PY
+      )
+      echo "  wheel cache : ${FLUXVLA_WHEEL_DIR:-${DATA_ROOT}/env/fluxvla_wheels}"
+      ls -l "${FLUXVLA_WHEEL_DIR:-${DATA_ROOT}/env/fluxvla_wheels}" 2>/dev/null | tail -5 || true
+    } >&2
+    die "fluxvla is not importable after scripts/install_project.sh (see diagnostics above)"
   fi
 fi
 
