@@ -98,20 +98,16 @@ else:
 PY
 )" || die "cannot resolve the CUDA arch to build for"
 
-# Cache key for the wheel. `safe.directory=*` is required because the mounted
-# repo is owned by the cluster user while the container runs as root (git
-# otherwise refuses with "detected dubious ownership" and caching silently
-# degrades to a rebuild per job). Without git, fall back to a content hash of
-# the python sources, so cache hits still work inside minimal images.
+# Cache key: a content hash of exactly what goes into the wheel (package
+# sources + setup files). It is deliberately NOT the git commit: editing a
+# launcher script, config or doc would otherwise invalidate a byte-identical
+# wheel and force a CUDA rebuild on every node of the next job.
 git_repo() { git -c safe.directory='*' -C "${REPO_DIR}" "$@" 2>/dev/null; }
-COMMIT_KEY=""
-if git_repo rev-parse --short HEAD >/dev/null; then
-  if git_repo diff --quiet HEAD -- fluxvla setup.py setup.cfg; then
-    COMMIT_KEY="$(git_repo rev-parse --short HEAD)"
-  fi
-else
-  COMMIT_KEY="$( cd "${REPO_DIR}" && { find fluxvla -type f -name '*.py' -not -path '*/__pycache__/*' | sort; echo setup.py; echo setup.cfg; } | xargs -r sha256sum | sha256sum | cut -c1-12 )" 2>/dev/null || COMMIT_KEY=""
-fi
+COMMIT_KEY="$( cd "${REPO_DIR}" && \
+  { find fluxvla -type f -name '*.py' -not -path '*/__pycache__/*' | sort;
+    echo setup.py; echo setup.cfg; } | xargs -r sha256sum | sha256sum | cut -c1-12 )" \
+  2>/dev/null || COMMIT_KEY=""
+GIT_DESC="$(git_repo rev-parse --short HEAD || true)"
 # Cache as a per-(key, arch) DIRECTORY holding the real wheel filename: pip
 # rejects a renamed wheel ("Invalid wheel filename (wrong number of parts)").
 if [[ -n "${COMMIT_KEY}" ]]; then
@@ -123,7 +119,7 @@ else
 fi
 
 log "repo=${REPO_DIR}"
-log "python=$("${PYTHON_BIN}" -V 2>&1) arch=${ARCH} key=${COMMIT_KEY:-<dirty worktree>}"
+log "python=$("${PYTHON_BIN}" -V 2>&1) arch=${ARCH} key=${COMMIT_KEY:-<none>} git=${GIT_DESC:-unknown}"
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   log "DRY RUN plan:"

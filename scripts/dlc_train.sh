@@ -129,6 +129,9 @@ NUM_WORKERS="${NUM_WORKERS:-4}"
 # so without this a 40k-step run only writes at 10k/20k/30k/40k and early
 # weights (before overfitting) are lost.
 SAVE_ITER="${SAVE_ITER:-1000}"
+# A full-finetune checkpoint is ~41 GB (.pt with optimizer state) + ~14.5 GB
+# (.safetensors), so keep the retention explicit: 10 x 55 GB per stage.
+MAX_KEEP_CKPTS="${MAX_KEEP_CKPTS:-10}"
 # Stage 1 (ego VLM SFT) has 4.1k samples and ~17 steps per epoch: loss is
 # already memorised by ~150 steps, so 40k steps is 2300 epochs of overfitting.
 STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-20000}"
@@ -180,6 +183,7 @@ run_train() {
     "runner.grad_accumulation_steps=${GA}"
     "runner.max_steps=${max_steps}"
     "runner.save_iter_interval=${save_iter}"
+    "runner.max_keep_ckpts=${MAX_KEEP_CKPTS}"
     # Base runner asserts that max_steps and max_epochs are not both set; the
     # launcher is always step-based, so clear any epoch budget from the config.
     "runner.max_epochs=None"

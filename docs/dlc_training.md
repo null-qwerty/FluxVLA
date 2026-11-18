@@ -403,10 +403,32 @@ ossutil cp -r oss://<bucket>/users/neri/data/robocasa_eef_V0.1 /mnt/data/cpfs/us
 
 ### 11.4 已验证 / 待验证
 
+在本机 3090（24 GB）+ 真实数据切片上逐段验证过（脚本无需 GPU 集群即可复现）：
+
 | 项 | 结果 |
 |---|---|
 | Gate1：joint → EEF → DLS IK → joint | MAE 0.011–0.013 rad（≈0.6–0.75°），位姿残差 ~1e-7 |
-| stage2 EEF 训练 smoke（本机 3090，2 步） | Loss 1.9842，checkpoint 正常保存 |
-| stage1 ego 数据集构建 | 76 帧/集（20Hz），states 32D、actions (16,32)、mask 精确命中 12 个手臂维度 |
-| 全量转换 | 24 任务 11,234 episode / 3.35M 帧，stats.json 已生成 |
+| stage1 数据集 / 8 个 transform / collator | states (32,)、actions (16,32)、action_masks (16,32)、images (3,224,224)、lang 200；batch (2,32)/(2,16,32) |
+| stage1 前向 + flow-matching loss（真实 ego 切片） | loss 可算；mask 生效：监督目标数 768 vs 2048 = 12/32 |
+| stage2 数据集（parquet + mp4 解码）/ collator | action_masks (16,) 时间掩码，batch (2,16,32) |
+| stage1 → stage2 交接（`EGO_STAGE1_CHECKPOINT`） | stage2 以 `name_mapping=None, strict_mapping=True` 完整加载；可训练参数 566.8M（13.5%） |
+| stage2 前向 + loss（LoRA） | loss 1.84（单卡 24 GB 只够前向） |
 | 评测适配器（EEF→关节 注入 robocasa_eval_runner） | ⏳ 下一步（IK/坐标变换已验证，仅剩管线接入） |
+
+未在本机验证的部分只有「反向 + 优化器步」：3B 全量微调与 DDP LoRA 都要 >24 GB 显存。
+这两条路径此前已在 DLC 上跑通过（`work_dirs/pi05_robocasa_lora_full_expert`、
+`pi05_robocasa_ego_mixed` 有完整 checkpoint），本次改动的数据/配置/EEF 空间已由上面逐段覆盖。
+
+### 11.5 检查点开销
+
+全量微调每个 checkpoint = 41 GB（`.pt`，含优化器状态）+ 14.5 GB（`.safetensors`）。
+默认 `SAVE_ITER=1000`、`MAX_KEEP_CKPTS=10`：阶段 1 每 1000 步写 ~55 GB，保留 10 个 ≈ 550 GB。
+显存/带宽/空间紧张时可这样调：
+
+```bash
+TASK=2 STAGE1_SAVE_ITER=2000 SAVE_ITER=2000 MAX_KEEP_CKPTS=4 bash scripts/dlc_train.sh
+```
+
+另外 stage1 的 20,000 步 ≈ 26 个 epoch（192,478 帧 / 全局 batch 256 ≈ 752 步/epoch），
+全量微调容易过拟合；想要更保守可 `STAGE1_MAX_STEPS=8000`（≈10 epoch），
+配合 `STAGE1_SAVE_ITER=1000` 保留早期权重。
