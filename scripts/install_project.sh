@@ -103,8 +103,11 @@ PY
 # launcher script, config or doc would otherwise invalidate a byte-identical
 # wheel and force a CUDA rebuild on every node of the next job.
 git_repo() { git -c safe.directory='*' -C "${REPO_DIR}" "$@" 2>/dev/null; }
+# LC_ALL=C: the sort order of the file list must not depend on the host locale,
+# otherwise the same tree hashes differently on a zh_CN node and a C-locale
+# container and the cache never hits.
 COMMIT_KEY="$( cd "${REPO_DIR}" && \
-  { find fluxvla -type f -name '*.py' -not -path '*/__pycache__/*' | sort;
+  { find fluxvla -type f -name '*.py' -not -path '*/__pycache__/*' | LC_ALL=C sort;
     echo setup.py; echo setup.cfg; } | xargs -r sha256sum | sha256sum | cut -c1-12 )" \
   2>/dev/null || COMMIT_KEY=""
 GIT_DESC="$(git_repo rev-parse --short HEAD || true)"
