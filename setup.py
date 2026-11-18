@@ -22,6 +22,33 @@ from torch.utils.cpp_extension import (BuildExtension, CppExtension,
 with open('README.md', 'r') as fh:
     long_description = fh.read()
 
+# Runtime assets that live next to the code: bundled tokenizers/configs of the
+# vendored backbones. Wheels otherwise contain python modules only, so a wheel
+# install of the same commit behaved differently from a source checkout.
+PACKAGE_DATA_GLOBS = ['*.json', '*.txt', '*.md', '*.proto']
+
+
+def find_package_dirs(root='fluxvla'):
+    """Directories that must be part of the wheel.
+
+    find_packages() only recurses into directories carrying an __init__.py, so
+    the vendored cosmos3 tree (data/vfm, model/vfm/mot, model/vfm/tokenizers,
+    model/vfm/utils are namespace packages) and the asset-only tokenizer dirs
+    (eagle2_hg_model, qwen3_tokenizer) were silently dropped from the wheel.
+    The resulting install died at import time with
+    "ModuleNotFoundError: No module named
+    'fluxvla.models.third_party_models.cosmos3.data'".
+    """
+    dirs = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d != '__pycache__')
+        has_module = any(f.endswith('.py') for f in filenames)
+        has_asset = any(f.endswith(('.json', '.txt', '.md', '.proto'))
+                        for f in filenames)
+        if has_module or has_asset:
+            dirs.append(os.path.relpath(dirpath).replace(os.sep, '.'))
+    return dirs
+
 
 def make_cuda_ext(name,
                   module,
@@ -67,7 +94,9 @@ setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     url=None,
-    packages=find_packages(),
+    packages=sorted(set(find_packages()) | set(find_package_dirs())),
+    package_data={'': PACKAGE_DATA_GLOBS},
+
     classifiers=[
         'Programming Language :: Python :: 3',
         'Operating System :: OS Independent',
