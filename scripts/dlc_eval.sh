@@ -96,6 +96,11 @@ export DATA_ROOT
 export ROBOCASA_ASSETS_DIR="${ROBOCASA_ASSETS_DIR:-${DATA_ROOT}/env/robocasa_gr1_assets/assets}"
 export PI05_TOKENIZER="${PI05_TOKENIZER:-${DATA_ROOT}/checkpoints/pi05_base}"
 export PI05_CHECKPOINT="${PI05_CHECKPOINT:-${DATA_ROOT}/checkpoints/pi05_base/model.safetensors}"
+# The EEF arms (TASK 2/5/6) read the converted RoboCasa tree and its statistics
+# at *config parse* time; without these the config falls back to the relative
+# ./datasets/robocasa_eef_V0.1 and eval dies in preflight.
+export ROBOCASA_EEF_DATA_ROOT="${ROBOCASA_EEF_DATA_ROOT:-${DATA_ROOT}/data/robocasa_eef_V0.1}"
+export ROBOCASA_EEF_STATS="${ROBOCASA_EEF_STATS:-${ROBOCASA_EEF_DATA_ROOT}/stats.json}"
 export TOKENIZERS_PARALLELISM=false
 export PYTHONHASHSEED="${PYTHONHASHSEED:-7}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"

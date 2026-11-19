@@ -27,6 +27,13 @@ _EEF_ROOT = os.path.abspath(
     os.environ.get('ROBOCASA_EEF_DATA_ROOT', './datasets/robocasa_eef_V0.1'))
 _EEF_STATS_PATH = os.environ.get('ROBOCASA_EEF_STATS',
                                 _EEF_ROOT + '/stats.json')
+if not os.path.isfile(_EEF_STATS_PATH):
+    raise FileNotFoundError(
+        'RoboCasa EEF statistics not found: '
+        f'{_EEF_STATS_PATH} (ROBOCASA_EEF_DATA_ROOT={_EEF_ROOT}). Point '
+        'ROBOCASA_EEF_DATA_ROOT/ROBOCASA_EEF_STATS at the tree produced by '
+        'tools/convert_robocasa_to_eef.py, e.g. '
+        '$DATA_ROOT/data/robocasa_eef_V0.1.')
 _EEF_STATS = json.loads(open(_EEF_STATS_PATH).read())
 _EEF_STAT_NAME = 'robocasa_eef'
 
