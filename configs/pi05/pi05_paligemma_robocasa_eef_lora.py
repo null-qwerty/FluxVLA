@@ -67,8 +67,17 @@ for _transform in _transforms:
 # with fluxvla/utils/eef_eval_adapter.py (FK for the observation, DLS IK for the
 # action) when `eef_action_space` is set.
 _base_.eval.unnorm_key = _EEF_STAT_NAME
-_base_.eval.denormalize_action.norm_type = 'mean_std'
-_base_.eval.denormalize_action.delta_action_mask = None
+# The joint recipe denormalizes into *absolute* targets by re-applying the
+# delta to the current state (DenormalizeDeltaAction). In the EEF space the
+# delta is applied by the deployment adapter (apply_eef_delta + DLS IK), so the
+# denormalizer must only undo the mean/std normalization - and
+# DenormalizeDeltaAction rejects a missing delta mask (None -> 0-d array).
+_base_.eval.denormalize_action = dict(
+    type='DenormalizePrivateAction',
+    statistic_name=_EEF_STAT_NAME,
+    norm_type='mean_std',
+    action_dim=29,
+)
 _base_.eval.eef_action_space = dict(enabled=True)
 # Eval-time state normalisation must match training (mean_std on the EEF stats,
 # not the joint recipe's quantile).
