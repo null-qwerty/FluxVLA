@@ -6,6 +6,8 @@
 #   TASK=2 bash scripts/dlc_train.sh
 #   TASK=3 bash scripts/dlc_train.sh
 #   TASK=4 bash scripts/dlc_train.sh
+#   TASK=5 bash scripts/dlc_train.sh
+#   TASK=6 bash scripts/dlc_train.sh
 #
 # TASK=1  VLM LoRA (adapters on the expert too) on RoboCasa 24 tasks, 40k steps
 # TASK=2  stage 1: ego VLM SFT  ->  stage 2: same as TASK=1
@@ -13,6 +15,13 @@
 # TASK=4  VLM LoRA + FULL action expert, 100k steps, lr/warmup of the
 #         published PI0.5 RoboCasa recipe (51.42%). Use this to separate
 #         "LoRA/40k undertrained" from the official full-finetune recipe.
+# TASK=5  same recipe as TASK 1 (VLM LoRA incl. expert, 40k steps) on the
+#         unified EEF RoboCasa data: the EEF-vs-joint control for TASK 1.
+# TASK=6  same recipe as TASK 4 (VLM LoRA + full expert, 100k steps, published
+#         lr/warmup) on the unified EEF data: the EEF-vs-joint control for
+#         TASK 4. No stage-1 (EgoDex) initialisation in either arm, so the
+#         pair isolates the action space.
+# TASK=7  legacy joint-space serial recipe (ego VLM SFT -> RoboCasa LoRA).
 #
 # Topology is auto-detected from the variables DLC / PAI injects:
 #   WORLD_SIZE (number of nodes), RANK (node rank), MASTER_ADDR, MASTER_PORT,
@@ -41,7 +50,7 @@ die() { echo "ERROR: $*" >&2; exit 2; }
 if [[ -z "${TASK}" ]]; then
   die "set TASK=1|2|3 (1: LoRA+full expert on RoboCasa, 2: ego SFT then 1, 3: parallel mixed)"
 fi
-case "${TASK}" in 1|2|3|4|5) ;; *) die "TASK must be 1, 2, 3, 4 or 5 (got '${TASK}')" ;; esac
+case "${TASK}" in 1|2|3|4|5|6|7) ;; *) die "TASK must be 1..7 (got '${TASK}')" ;; esac
 
 # ---------------------------------------------------------------- paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -121,7 +130,8 @@ PER_DEVICE_BS="${PER_DEVICE_BS:-8}"
 TARGET_GLOBAL_BS="${TARGET_GLOBAL_BS:-256}"
 # Per-task default: TASK 4 matches the published 100k-step recipe.
 case "${TASK}" in
-  4) MAX_STEPS="${MAX_STEPS:-100000}" ;;
+  # TASK 6 mirrors TASK 4: the published 100k-step, lr 2.5e-5 recipe.
+  4|6) MAX_STEPS="${MAX_STEPS:-100000}" ;;
   *) MAX_STEPS="${MAX_STEPS:-40000}" ;;
 esac
 NUM_WORKERS="${NUM_WORKERS:-4}"
@@ -333,7 +343,30 @@ case "${TASK}" in
       "configs/pi05/pi05_paligemma_robocasa_vlm_lora_expert_full.py" \
       "${WORK_ROOT}/pi05_robocasa_lora_vlm_expert_full"
     ;;
-  5)
+  5|6)
+    # EEF-vs-joint controls: identical recipes to TASK 1 (40k) and TASK 4
+    # (100k, full expert) on the converted RoboCasa EEF tree, starting from the
+    # PI0.5 base checkpoint so the action space is the only difference.
+    check_dir "${ROBOCASA_EEF_DATA_ROOT}" \
+      "run tools/convert_robocasa_to_eef.py for all 24 task dirs into ${ROBOCASA_EEF_DATA_ROOT}"
+    check_file "${ROBOCASA_EEF_STATS}" "the RoboCasa EEF conversion must write stats.json"
+    if [[ -n "${EGO_STAGE1_CHECKPOINT:-}" ]]; then
+      log "WARN: ignoring EGO_STAGE1_CHECKPOINT for TASK ${TASK} (this arm starts from the base checkpoint)"
+      unset EGO_STAGE1_CHECKPOINT
+    fi
+    if [[ "${TASK}" == "5" ]]; then
+      log "EEF post-training, TASK 1 recipe (VLM LoRA incl. expert), max_steps=${MAX_STEPS}"
+      run_train \
+        "configs/pi05/pi05_paligemma_robocasa_eef_lora.py" \
+        "${WORK_ROOT}/pi05_robocasa_eef_lora_from_base"
+    else
+      log "EEF post-training, TASK 4 recipe (VLM LoRA + full action expert), max_steps=${MAX_STEPS}"
+      run_train \
+        "configs/pi05/pi05_paligemma_robocasa_eef_lora_expert_full.py" \
+        "${WORK_ROOT}/pi05_robocasa_eef_lora_expert_full"
+    fi
+    ;;
+  7)
     # Legacy joint-space serial recipe (kept for comparison with TASK 2).
     check_file "${EGO_JSONL}" "generate it with tools/egodex_to_vlm_jsonl.py"
     log "stage 1/2: ego VLM SFT (${EGO_JSONL}, max_steps=${STAGE1_MAX_STEPS})"

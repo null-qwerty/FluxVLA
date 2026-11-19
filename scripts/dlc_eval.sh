@@ -3,7 +3,9 @@
 #
 # Usage (inside the FluxVLA image on a GPU node):
 #   EVAL_TASK=1 bash scripts/dlc_eval.sh                # TASK 1 (RoboCasa-only LoRA)
-#   EVAL_TASK=2 bash scripts/dlc_eval.sh                # TASK 2 (ego SFT -> RoboCasa LoRA)
+#   EVAL_TASK=4 bash scripts/dlc_eval.sh                # TASK 4 (LoRA + full expert)
+#   EVAL_TASK=7 bash scripts/dlc_eval.sh                # TASK 7 (legacy ego SFT -> joint LoRA)
+#   EVAL_TASK=2|5|6 bash scripts/dlc_eval.sh            # EEF arms: blocked on the EEF->joint adapter
 #   EVAL_TASK=3 bash scripts/dlc_eval.sh                # TASK 3 (ego + RoboCasa mixed)
 #   CONFIG=configs/...py CKPT=/path/ckpt.safetensors bash scripts/dlc_eval.sh
 #
@@ -36,16 +38,28 @@ case "${EVAL_TASK}" in
     CONFIG="${CONFIG:-configs/pi05/pi05_paligemma_robocasa_ego_vlm_mixed_lora.py}"
     CKPT="${CKPT:-${DATA_ROOT}/work_dirs/pi05_robocasa_lora_full_expert/checkpoints/latest-checkpoint.safetensors}"
     ;;
-  2)
-    CONFIG="${CONFIG:-configs/pi05/pi05_paligemma_robocasa_ego_vlm_mixed_lora.py}"
-    CKPT="${CKPT:-${DATA_ROOT}/work_dirs/pi05_robocasa_lora_from_ego/checkpoints/latest-checkpoint.safetensors}"
+  2|5|6)
+    # The EEF arms (2 ego->EEF, 5 EEF LoRA, 6 EEF LoRA+full expert) need the
+    # deployment adapter that maps the predicted EEF delta back to 29D joint
+    # targets (camera -> base, apply delta, DLS IK). Not wired yet, so refuse
+    # instead of silently evaluating another checkpoint.
+    die "EVAL_TASK=${EVAL_TASK} is an EEF-space arm: robocasa eval needs the EEF->joint adapter (see docs/eef_action_space.md), which is not wired yet"
     ;;
   3)
     CONFIG="${CONFIG:-configs/pi05/pi05_paligemma_robocasa_ego_vlm_mixed_full_finetune.py}"
     CKPT="${CKPT:-${DATA_ROOT}/work_dirs/pi05_robocasa_ego_mixed/checkpoints/latest-checkpoint.safetensors}"
     ;;
+  4)
+    CONFIG="${CONFIG:-configs/pi05/pi05_paligemma_robocasa_vlm_lora_expert_full.py}"
+    CKPT="${CKPT:-${DATA_ROOT}/work_dirs/pi05_robocasa_lora_vlm_expert_full/checkpoints/latest-checkpoint.safetensors}"
+    ;;
+  7)
+    # Legacy joint-space serial recipe (ego VLM SFT -> joint RoboCasa LoRA).
+    CONFIG="${CONFIG:-configs/pi05/pi05_paligemma_robocasa_ego_vlm_mixed_lora.py}"
+    CKPT="${CKPT:-${DATA_ROOT}/work_dirs/pi05_robocasa_lora_from_ego/checkpoints/latest-checkpoint.safetensors}"
+    ;;
   *)
-    die "EVAL_TASK must be 1, 2 or 3 (got '${EVAL_TASK}')"
+    die "EVAL_TASK must be 1, 3, 4 or 7 (2/5/6 are EEF arms, adapter pending) (got '${EVAL_TASK}')"
     ;;
 esac
 

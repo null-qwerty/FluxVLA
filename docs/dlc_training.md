@@ -13,17 +13,22 @@
 | 启动命令 | `TASK=1 bash scripts/dlc_train.sh`（工作目录设为 `/mnt/data/cpfs/users/neri/code/FluxVLA`） |
 | 节点数/卡数 | 按需填；脚本能识别 1~N 节点、每节点任意卡数 |
 
-三个任务（`TASK` 环境变量）：
+任务列表（`TASK` 环境变量）：
 
-| TASK | 内容 | 配置文件 | 输出目录（`DATA_ROOT/work_dirs/`） |
-|---|---|---|---|
-| 1 | VLM LoRA（适配器也盖在 action expert 上），40k 步 | `pi05_paligemma_robocasa_ego_vlm_mixed_lora.py` | `pi05_robocasa_lora_full_expert` |
-| 2 | 先 ego VLM SFT，再同 TASK 1 | `pi05_paligemma_egodex_vlm_sft.py` → `..._lora.py` | `pi05_egodex_vlm_sft`、`pi05_robocasa_lora_from_ego` |
-| 3 | 并行混训（RoboCasa VLA : ego VLM = 3:1） | `pi05_paligemma_robocasa_ego_vlm_mixed_full_finetune.py` | `pi05_robocasa_ego_mixed` |
-| 4 | VLM LoRA + **action expert 全量**，100k 步、lr 2.5e-5 / warmup 5000（对齐官方 51.42% 配方） | `pi05_paligemma_robocasa_vlm_lora_expert_full.py` | `pi05_robocasa_lora_vlm_expert_full` |
+| TASK | 动作空间 | 内容 | 配置文件 | 输出目录（`DATA_ROOT/work_dirs/`） |
+|---|---|---|---|---|
+| 1 | 关节（29D） | VLM LoRA（适配器也盖在 action expert 上），40k 步 | `pi05_paligemma_robocasa_ego_vlm_mixed_lora.py` | `pi05_robocasa_lora_full_expert` |
+| 2 | **EEF** | 先 ego EEF 全量微调，再用 EEF RoboCasa 数据做 VLM LoRA | `pi05_paligemma_egodex_eef_full_finetune.py` → `..._eef_lora.py` | `pi05_egodex_eef_sft`、`pi05_robocasa_eef_lora_from_ego` |
+| 3 | 关节 | 并行混训（RoboCasa VLA : ego VLM = 3:1） | `pi05_paligemma_robocasa_ego_vlm_mixed_full_finetune.py` | `pi05_robocasa_ego_mixed` |
+| 4 | 关节 | VLM LoRA + **action expert 全量**，100k 步、lr 2.5e-5 / warmup 5000（对齐官方 51.42% 配方） | `pi05_paligemma_robocasa_vlm_lora_expert_full.py` | `pi05_robocasa_lora_vlm_expert_full` |
+| 5 | **EEF** | TASK 1 的配方（VLM LoRA 含 expert），40k 步 —— EEF vs 关节对照 | `pi05_paligemma_robocasa_eef_lora.py` | `pi05_robocasa_eef_lora_from_base` |
+| 6 | **EEF** | TASK 4 的配方（VLM LoRA + expert 全量），100k 步 —— EEF vs 关节对照 | `pi05_paligemma_robocasa_eef_lora_expert_full.py` | `pi05_robocasa_eef_lora_expert_full` |
+| 7 | 关节 | 旧串行方案（ego VLM SFT → RoboCasa 关节 LoRA），仅作对照 | `pi05_paligemma_egodex_vlm_sft.py` → `..._lora.py` | `pi05_egodex_vlm_sft`、`pi05_robocasa_lora_from_ego` |
 
-TASK 1 不需要 ego 数据；TASK 3/5 需要 `DATA_ROOT/egodex_vlm/ego.jsonl`（见第 2 节）；
-TASK 2 需要 EEF 转换后的 ego + RoboCasa 数据（见第 2.3 节）。
+TASK 1/4/5/6 不需要 ego 数据（都从 PI0.5 base 直接后训练，5/6 会忽略
+`EGO_STAGE1_CHECKPOINT`，保证只比较动作空间）；TASK 3/7 需要
+`DATA_ROOT/egodex_vlm/ego.jsonl`（见第 2 节）；TASK 2/5/6 需要 EEF 转换后的
+数据（见第 2.3 节：`egodex_eef_v1` 与 `data/robocasa_eef_V0.1`）。
 
 ## 2. 一次性准备（已经做完，换机器时照做）
 
@@ -45,7 +50,7 @@ cp -r /mnt/data/cpfs/users/eira/checkpoints/pi05_base $DATA/checkpoints/pi05_bas
 #     --out $DATA_ROOT/egodex_eef --fps-sample 20 --max-episodes 20 \
 #     --stats-out $DATA_ROOT/egodex_eef/stats.json
 
-# 2.2 ego.jsonl + 抽帧（TASK 3/5 才需要；16 进程约 20-40 分钟）
+# 2.2 ego.jsonl + 抽帧（TASK 3/7 才需要；16 进程约 20-40 分钟）
 # 生成后在同一台机器（数据机）上写 manifest，供每节点 preflight 校验数据一致性：
 # python tools/write_annotation_manifest.py <out>/ego.jsonl \
 #                                               <out>/ego_train.jsonl <out>/ego_val.jsonl
@@ -132,7 +137,7 @@ TASK=1 DRY_RUN=1 bash scripts/dlc_train.sh
 
 | 现象 | 原因/处理 |
 |---|---|
-| `missing file: .../ego.jsonl` | TASK 2/3 需要先生成 ego.jsonl（第 2.2 节），或 `EGO_JSONL=` 指到已有文件 |
+| `missing file: .../ego.jsonl` | TASK 3/7 需要先生成 ego.jsonl（第 2.2 节），或 `EGO_JSONL=` 指到已有文件 |
 | `missing directory: .../robocasa_lerobot_V2.1` | 数据没挂上；用 `ROBOCASA_DATA_ROOT=` 指到实际路径 |
 | `MASTER_ADDR is not injected for a multi-node job` | 多节点但没注入 master；手动 `MASTER_ADDR=<rank0 ip>` |
 | `WARN: nvidia-smi reports N GPUs ...` | 显式 `NPROC_PER_NODE=<实际卡数>` |
@@ -161,7 +166,13 @@ EVAL_TASK=1 SMOKE=1 bash scripts/dlc_eval.sh
 # 全量：24 任务 x 50 trials x 720 步
 EVAL_TASK=1 bash scripts/dlc_eval.sh        # TASK 1：RoboCasa-only LoRA
 EVAL_TASK=3 bash scripts/dlc_eval.sh        # TASK 3：ego + RoboCasa 并行混训
-EVAL_TASK=2 bash scripts/dlc_eval.sh        # TASK 2：ego SFT -> RoboCasa LoRA
+EVAL_TASK=4 bash scripts/dlc_eval.sh        # TASK 4：LoRA + expert 全量
+EVAL_TASK=7 bash scripts/dlc_eval.sh        # TASK 7：旧串行（ego SFT -> 关节 LoRA）
+
+# EEF 动作空间的三条臂（2/5/6）评测需要「EEF delta -> 29D 关节」的部署适配层
+# （相机系 -> 基座系、按当前 EEF 施加 delta、DLS IK）。IK 与坐标变换已验证，
+# 但管线接线还没做，因此 EVAL_TASK=2/5/6 现在会直接报错退出，避免误评别的 ckpt。
+EVAL_TASK=2 bash scripts/dlc_eval.sh        # ✗ 待接适配层
 ```
 
 `EVAL_TASK` 只是默认 ckpt/config 的映射；也可以显式指定：
@@ -233,7 +244,11 @@ $DATA_ROOT/work_dirs/eval_runs/<run>_<ts>/
 - TASK 2 是**统一 EEF 动作空间**的串行方案（见 `docs/eef_action_space.md`）：
   ego 数据（相机系绝对 EEF + delta EEF）全量微调 → RoboCasa 数据 VLM LoRA；
   手/腰部维度保留 robot 关节空间，ego 样本用逐维 action mask 只监督手臂。
-- TASK 5 是旧的关节空间串行方案（ego VLM SFT → RoboCasa 关节 LoRA），保留作对照。
+- TASK 5/6 是 EEF 空间的两个对照臂：TASK 5 = TASK 1 配方（VLM LoRA 含 expert，40k），
+  TASK 6 = TASK 4 配方（VLM LoRA + expert 全量，100k）。三者共享同一份 EEF RoboCasa 数据、
+  统计量、batch 256 与评测协议，只有动作空间不同，因此
+  「1 vs 5」「4 vs 6」是干净的 EEF-vs-关节 对照。
+- TASK 7 是旧的关节空间串行方案（ego VLM SFT → RoboCasa 关节 LoRA），保留作对照。
 - TASK 4 是 TASK 1 的修正版：VLM 仍用 LoRA，但 **action expert 全量训练**，步数/LR/预热
   对齐官方发布配方（`pi05_paligemma_robocasa_full_data_full_finetune_bs256`，24×50 评测 51.42%）。
 - 三者（1/2/3）步数预算一致（40k updates、global 256），可直接比较 24×50 的成功率；

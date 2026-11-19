@@ -59,9 +59,19 @@ mask   (29): ego 样本 = [1]*6 + [0]*6 + [1]*6 + [0]*6 + [0]*3；robot 样本 =
 
 ## 训练对照
 
-- baseline：现有 29D joint（TASK 1 lora / frozen）
-- 对照 A：EEF 空间，仅 robocasa 数据
-- 实验 B：EEF 空间，ego 全量 → robocasa LoRA（本方案）
+四条臂共享同一份 RoboCasa 数据、统计量、batch 256、评测协议，只改动作空间/配方：
+
+| `TASK` | 动作空间 | 配方 | 步数 |
+|---|---|---|---|
+| 1 | 29D joint | VLM LoRA（含 expert 适配器） | 40k |
+| 5 | **EEF** | 同 TASK 1 | 40k |
+| 4 | 29D joint | VLM LoRA + expert 全量 | 100k |
+| 6 | **EEF** | 同 TASK 4 | 100k |
+| 2 | **EEF** | ego EEF 全量微调 → RoboCasa VLM LoRA | 20k + 40k |
+
+TASK 5/6 是纯后训练臂（不加载 ego 权重，启动器会忽略 `EGO_STAGE1_CHECKPOINT`），
+因此「1 vs 5」「4 vs 6」是干净的 EEF-vs-关节 对照；「2 vs 1」衡量 ego 预训练增益。
+EEF 臂的闭环评测需要 EEF delta → 29D 关节的适配层（IK 已验证，接线待做）。
 
 ## 关键风险
 
