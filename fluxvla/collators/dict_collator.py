@@ -49,6 +49,12 @@ class DictCollator:
 
             # stack keys
             if key in self.keys:
+                # numpy scalars (np.float64/np.int64) are not ndarray instances
+                # but are stackable; promote them so a batch whose first sample
+                # came from a different dataset does not change the behaviour.
+                if isinstance(first_val, np.generic):
+                    values = [np.asarray(value) for value in values]
+                    first_val = values[0]
                 if isinstance(first_val, np.ndarray):
                     collated[key] = torch.from_numpy(np.stack(values))
                 elif isinstance(first_val, torch.Tensor):

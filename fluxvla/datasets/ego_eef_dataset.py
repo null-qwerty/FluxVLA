@@ -199,7 +199,8 @@ class EgoEEFDataset:
             "task_description": record.get(self.task_key, ""),
             # Kept in sync with the RoboCasa parquet samples so both sources can
             # share one collator (see EEFMixedDataset).
-            "timestamp": np.float64(record.get("timestamp", index / 20.0)),
+            "timestamp": np.asarray(
+                record.get("timestamp", index / 20.0), dtype=np.float64),
             "info": {},
         }
         # No data_root/index key: the DictCollator only accepts the keys and
