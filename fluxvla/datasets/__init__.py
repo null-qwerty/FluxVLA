@@ -15,6 +15,7 @@
 from .arm_dataset import *  # noqa: F401, F403
 from .balanced_dataset_wrapper import *  # noqa: F401, F403
 from .dataset_wrapper import *  # noqa: F401, F403
+from .eef_mixed_dataset import EEFMixedDataset  # noqa: F401
 from .ego_eef_dataset import EgoEEFDataset  # noqa: F401
 from .language_chunk_parquet_dataset import *  # noqa: F401, F403
 from .llava_format_dataset import LLaVAFormatDataset  # noqa: F401

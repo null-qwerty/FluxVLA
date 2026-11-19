@@ -72,8 +72,14 @@ case "${EVAL_TASK}" in
     CONFIG="${CONFIG:-configs/pi05/pi05_paligemma_robocasa_ego_vlm_mixed_lora.py}"
     CKPT="${CKPT:-${DATA_ROOT}/work_dirs/pi05_robocasa_lora_from_ego/checkpoints/latest-checkpoint.safetensors}"
     ;;
+  8)
+    # EEF model trained with EgoDex frames mixed into every RoboCasa batch
+    # (TASK 8). Same deployment adapter as TASK 2/5/6.
+    CONFIG="${CONFIG:-configs/pi05/pi05_paligemma_robocasa_eef_lora.py}"
+    CKPT="${CKPT:-${DATA_ROOT}/work_dirs/pi05_robocasa_eef_mixed/checkpoints/latest-checkpoint.safetensors}"
+    ;;
   *)
-    die "EVAL_TASK must be 1..7 (got '${EVAL_TASK}')"
+    die "EVAL_TASK must be 1..8 (got '${EVAL_TASK}')"
     ;;
 esac
 

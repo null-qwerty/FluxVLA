@@ -510,6 +510,36 @@ class DenormalizeDeltaAction(DenormalizePrivateAction):
 
 
 @TRANSFORMS.register_module()
+class ExpandActionMasks:
+    """Broadcast a time-only action mask to a per-dimension mask.
+
+    The joint RoboCasa recipe supervises every action dimension and therefore
+    carries a (horizon,) mask. The EEF ego data masks hand/waist dimensions
+    and carries (horizon, dim). Mixed training needs one shape, so the
+    time-only mask is expanded to all-ones per dimension.
+    """
+
+    def __init__(self, action_dim: int = 32, mask_key: str = 'action_masks',
+                 action_key: str = 'actions') -> None:
+        self.action_dim = int(action_dim)
+        self.mask_key = mask_key
+        self.action_key = action_key
+
+    def __call__(self, data: Dict) -> Dict:
+        mask = data.get(self.mask_key)
+        if mask is None:
+            return data
+        mask = np.asarray(mask)
+        if mask.ndim == 2:
+            return data
+        action = np.asarray(data[self.action_key])
+        width = min(self.action_dim, action.shape[-1])
+        data[self.mask_key] = np.repeat(
+            mask.reshape(-1, 1).astype(np.float32), width, axis=1)
+        return data
+
+
+@TRANSFORMS.register_module()
 class NormalizeStatesAndActions:
     """Normalize states and actions in the data.
     This transform normalizes the state and action

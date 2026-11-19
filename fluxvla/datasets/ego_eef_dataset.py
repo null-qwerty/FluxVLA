@@ -197,6 +197,10 @@ class EgoEEFDataset:
             "images": [self._load_image(record)],
             "img_masks": np.array([True]),
             "task_description": record.get(self.task_key, ""),
+            # Kept in sync with the RoboCasa parquet samples so both sources can
+            # share one collator (see EEFMixedDataset).
+            "timestamp": np.float64(record.get("timestamp", index / 20.0)),
+            "info": {},
         }
         # No data_root/index key: the DictCollator only accepts the keys and
         # meta_keys of the config, and nothing in the EEF transform chain needs

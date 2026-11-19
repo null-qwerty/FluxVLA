@@ -438,7 +438,38 @@ ossutil cp -r oss://<bucket>/users/neri/data/robocasa_eef_V0.1 /mnt/data/cpfs/us
 这两条路径此前已在 DLC 上跑通过（`work_dirs/pi05_robocasa_lora_full_expert`、
 `pi05_robocasa_ego_mixed` 有完整 checkpoint），本次改动的数据/配置/EEF 空间已由上面逐段覆盖。
 
-### 11.5 检查点开销
+### 11.5 TASK 8：把 ego 数据混进 RoboCasa 的每一个 batch
+
+TASK 2 的串行做法（ego 全量微调 20k 步 -> RoboCasa LoRA）被证明零迁移：
+TASK 5（无 ego 阶段）在 2k/8k/19k/20k 步的 loss 与 TASK 2 完全相同
+（0.312/0.200/0.176/0.173 vs 0.312/0.204/0.179/0.175）。因此新增 TASK 8，
+改为**批内混训**：
+
+* 一个 dataloader、两个数据源：24 任务 RoboCasa EEF parquet + EgoDex EEF 帧；
+* 每个源用自己的统计量做 mean/std 归一化（样本自带 stats）；
+* RoboCasa 样本监督全部维度（时间 mask 展开成逐维），EgoDex 样本只监督 12 个
+  手臂维（逐维 mask）；
+* 采样权重由 EGO_MIX_WEIGHT 控制（默认 0.25，即 3:1）。
+
+```bash
+# 正式：stage1 ego 只训动作头（VLM 冻结，4k 步）-> stage2 混训 40k 步
+TASK=8 bash scripts/dlc_train.sh
+TASK=8 EGO_MIX_WEIGHT=0.25 MAX_STEPS=40000 bash scripts/dlc_train.sh
+
+# 冒烟
+TASK=8 DRY_RUN=1 bash scripts/dlc_train.sh
+TASK=8 MAX_STEPS=20 STAGE1_MAX_STEPS=20 bash scripts/dlc_train.sh
+
+# 评测（与 TASK 2/5/6 同一套 EEF 部署适配器）
+EVAL_TASK=8 NUM_TRIALS_PER_TASK=10 bash scripts/dlc_eval.sh
+```
+
+实现：fluxvla/datasets/eef_mixed_dataset.py（加权交错）、
+fluxvla/transforms/normalize.py::ExpandActionMasks、
+configs/pi05/pi05_paligemma_robocasa_eef_mixed_vla.py、
+configs/pi05/pi05_paligemma_egodex_eef_expert_only.py。
+
+### 11.6 检查点开销
 
 全量微调每个 checkpoint = 41 GB（`.pt`，含优化器状态）+ 14.5 GB（`.safetensors`）。
 默认 `SAVE_ITER=1000`、`MAX_KEEP_CKPTS=10`：阶段 1 每 1000 步写 ~55 GB，保留 10 个 ≈ 550 GB。

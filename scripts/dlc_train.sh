@@ -12,6 +12,9 @@
 # TASK=1  VLM LoRA (adapters on the expert too) on RoboCasa 24 tasks, 40k steps
 # TASK=2  stage 1: ego VLM SFT  ->  stage 2: same as TASK=1
 # TASK=3  parallel mixed training (RoboCasa VLA stream : ego VLM stream = 3:1)
+# TASK=8  EEF with ego data mixed into every RoboCasa batch:
+#         stage 1 action-expert-only ego SFT (VLM frozen, 4k) ->
+#         stage 2 mixed RoboCasa+EgoDex VLA (EGO_MIX_WEIGHT, default 0.25)
 # TASK=4  VLM LoRA + FULL action expert, 100k steps, lr/warmup of the
 #         published PI0.5 RoboCasa recipe (51.42%). Use this to separate
 #         "LoRA/40k undertrained" from the official full-finetune recipe.
@@ -50,7 +53,7 @@ die() { echo "ERROR: $*" >&2; exit 2; }
 if [[ -z "${TASK}" ]]; then
   die "set TASK=1|2|3 (1: LoRA+full expert on RoboCasa, 2: ego SFT then 1, 3: parallel mixed)"
 fi
-case "${TASK}" in 1|2|3|4|5|6|7) ;; *) die "TASK must be 1..7 (got '${TASK}')" ;; esac
+case "${TASK}" in 1|2|3|4|5|6|7|8) ;; *) die "TASK must be 1..8 (got '${TASK}')" ;; esac
 
 # ---------------------------------------------------------------- paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -365,6 +368,34 @@ case "${TASK}" in
         "configs/pi05/pi05_paligemma_robocasa_eef_lora_expert_full.py" \
         "${WORK_ROOT}/pi05_robocasa_eef_lora_expert_full"
     fi
+    ;;
+  8)
+    # EEF with ego supervision inside every RoboCasa batch ("mixed VLA").
+    # Stage 1 trains only the action expert on ego data (VLM frozen, 4k steps by
+    # default); stage 2 mixes EgoDex frames (12 arm dims, per-dim mask) into the
+    # RoboCasa batches instead of relying on the serial hand-off that showed no
+    # transfer in TASK 2 (TASK 5 == TASK 2 loss at 2k/8k/19k/20k).
+    check_file "${EGO_EEF_JSONL}" "run tools/convert_egodex_to_eef.py"
+    check_file "${EGO_EEF_STATS}" "the EgoDex EEF conversion must write stats.json"
+    check_dir "${ROBOCASA_EEF_DATA_ROOT}" "run tools/convert_robocasa_to_eef.py"
+    check_file "${ROBOCASA_EEF_STATS}" "the RoboCasa EEF conversion must write stats.json"
+    STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-4000}"
+    log "stage 1/2: ego EEF action-expert only (${EGO_EEF_JSONL}, max_steps=${STAGE1_MAX_STEPS})"
+    RUN_MAX_STEPS="${STAGE1_MAX_STEPS}" RUN_SAVE_ITER="${STAGE1_SAVE_ITER:-1000}" run_train \
+      "configs/pi05/pi05_paligemma_egodex_eef_expert_only.py" \
+      "${WORK_ROOT}/pi05_egodex_eef_expert_only"
+    STAGE1_CKPT="${WORK_ROOT}/pi05_egodex_eef_expert_only/checkpoints/latest-checkpoint.safetensors"
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      log "stage 2/2 (dry-run): would export EGO_STAGE1_CHECKPOINT=${STAGE1_CKPT}"
+    else
+      check_file "${STAGE1_CKPT}" "stage 1 finished without writing ${STAGE1_CKPT}"
+      export EGO_STAGE1_CHECKPOINT="${STAGE1_CKPT}"
+    fi
+    export ROBOCASA_DATA_ROOT="${ROBOCASA_EEF_DATA_ROOT}"
+    log "stage 2/2: mixed RoboCasa+ego VLA (EGO_MIX_WEIGHT=${EGO_MIX_WEIGHT:-0.25})"
+    run_train \
+      "configs/pi05/pi05_paligemma_robocasa_eef_mixed_vla.py" \
+      "${WORK_ROOT}/pi05_robocasa_eef_mixed"
     ;;
   7)
     # Legacy joint-space serial recipe (kept for comparison with TASK 2).
