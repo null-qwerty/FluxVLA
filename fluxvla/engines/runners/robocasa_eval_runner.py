@@ -1108,10 +1108,19 @@ class RobocasaEvalRunner(BaseEvalRunner):
                         action_denormed = self._active_denorm(denorm_input)
 
                         if self.eef_adapter is not None:
-                            # EEF delta (camera frame) -> absolute 29D joint
-                            # targets for this env step.
+                            # The EEF datasets store ONE-STEP deltas
+                            # (action[k] = pose(t+k+1) - pose(t+k)), unlike the
+                            # joint recipe whose relative actions are measured
+                            # from the chunk-start observation. Applying every
+                            # slot to the snapshot would therefore command
+                            # pose(t) + delta(t+k) and lag behind the robot by
+                            # the already accumulated motion; re-reading the
+                            # current joint state keeps the executed target at
+                            # pose(t+k) + delta(t+k), i.e. the training
+                            # convention.
+                            current_joint = flatten_robocasa_state(obs)
                             action_denormed = self.eef_adapter.action_to_joint(
-                                action_denormed, joint_snapshot)
+                                action_denormed, current_joint)
                             if t == 0 and chunk_index == 0:
                                 overwatch.info(
                                     '[eef] IK residual after first action: '
