@@ -147,6 +147,10 @@ SAVE_ITER="${SAVE_ITER:-1000}"
 MAX_KEEP_CKPTS="${MAX_KEEP_CKPTS:-10}"
 # Stage 1 (ego VLM SFT) has 4.1k samples and ~17 steps per epoch: loss is
 # already memorised by ~150 steps, so 40k steps is 2300 epochs of overfitting.
+# Remember whether the caller set the stage-1 budget: the TASK 8 recipe wants a
+# much shorter default (4k) while TASK 2 keeps 20k, and "${VAR:-x}" cannot
+# override a value that was already defaulted above.
+STAGE1_MAX_STEPS_SET="${STAGE1_MAX_STEPS:-}"
 STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-20000}"
 STAGE1_SAVE_ITER="${STAGE1_SAVE_ITER:-1000}"
 
@@ -379,7 +383,7 @@ case "${TASK}" in
     check_file "${EGO_EEF_STATS}" "the EgoDex EEF conversion must write stats.json"
     check_dir "${ROBOCASA_EEF_DATA_ROOT}" "run tools/convert_robocasa_to_eef.py"
     check_file "${ROBOCASA_EEF_STATS}" "the RoboCasa EEF conversion must write stats.json"
-    STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS:-4000}"
+    STAGE1_MAX_STEPS="${STAGE1_MAX_STEPS_SET:-4000}"
     log "stage 1/2: ego EEF action-expert only (${EGO_EEF_JSONL}, max_steps=${STAGE1_MAX_STEPS})"
     RUN_MAX_STEPS="${STAGE1_MAX_STEPS}" RUN_SAVE_ITER="${STAGE1_SAVE_ITER:-1000}" run_train \
       "configs/pi05/pi05_paligemma_egodex_eef_expert_only.py" \
