@@ -71,7 +71,15 @@ mask   (29): ego 样本 = [1]*6 + [0]*6 + [1]*6 + [0]*6 + [0]*3；robot 样本 =
 
 TASK 5/6 是纯后训练臂（不加载 ego 权重，启动器会忽略 `EGO_STAGE1_CHECKPOINT`），
 因此「1 vs 5」「4 vs 6」是干净的 EEF-vs-关节 对照；「2 vs 1」衡量 ego 预训练增益。
-EEF 臂的闭环评测需要 EEF delta → 29D 关节的适配层（IK 已验证，接线待做）。
+EEF 臂的闭环评测由 `fluxvla/utils/eef_eval_adapter.py` 完成（`RobocasaEvalRunner`
+的 `eef_action_space` 开关，配置里已打开）：
+
+- 观测：环境给 29D 关节 → FK → 相机系 EEF 绝对位姿（pos + 四元数）→ 手/腰原样透传；
+- 动作：模型给 29D EEF delta → 施加到“当前”相机系 EEF 位姿 → 转回世界系 → 每臂
+  DLS IK（60 次迭代）→ 29D 绝对关节目标；手（6D 指令）/腰（绝对）原样透传；
+- 离线校验：`python tools/validate_eef_eval_adapter.py --parquet <episode.parquet>`
+  检查「FK 复现数据集 state」「零 delta 不动」「delta 往返误差 <2e-3」「手/腰透传」，
+  实测 1.3e-2（≈0.07σ，robosuite 版本间 FK 差异）/ 9.5e-8 / 1.3e-7 / 通过。
 
 ## 关键风险
 

@@ -169,10 +169,14 @@ EVAL_TASK=3 bash scripts/dlc_eval.sh        # TASK 3：ego + RoboCasa 并行混�
 EVAL_TASK=4 bash scripts/dlc_eval.sh        # TASK 4：LoRA + expert 全量
 EVAL_TASK=7 bash scripts/dlc_eval.sh        # TASK 7：旧串行（ego SFT -> 关节 LoRA）
 
-# EEF 动作空间的三条臂（2/5/6）评测需要「EEF delta -> 29D 关节」的部署适配层
-# （相机系 -> 基座系、按当前 EEF 施加 delta、DLS IK）。IK 与坐标变换已验证，
-# 但管线接线还没做，因此 EVAL_TASK=2/5/6 现在会直接报错退出，避免误评别的 ckpt。
-EVAL_TASK=2 bash scripts/dlc_eval.sh        # ✗ 待接适配层
+# EEF 动作空间的三条臂（2/5/6）经由部署适配层评测：
+# 观测 29D 关节 -> FK -> 相机系 EEF；动作 EEF delta -> 施加 -> DLS IK -> 29D 关节目标。
+# 上机前先离线校验适配层（几秒钟）：
+#   python tools/validate_eef_eval_adapter.py --parquet \
+#     $DATA_ROOT/data/robocasa_eef_V0.1/PnPBottleToCabinetClose/data/chunk-000/episode_000000.parquet
+EVAL_TASK=2 bash scripts/dlc_eval.sh        # TASK 2：ego EEF SFT -> RoboCasa EEF LoRA
+EVAL_TASK=5 bash scripts/dlc_eval.sh        # TASK 5：EEF LoRA（40k）
+EVAL_TASK=6 bash scripts/dlc_eval.sh        # TASK 6：EEF LoRA + expert 全量（100k）
 ```
 
 `EVAL_TASK` 只是默认 ckpt/config 的映射；也可以显式指定：

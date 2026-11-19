@@ -55,11 +55,22 @@ for _transform in _transforms:
             _transform['state_norm_type'] = 'mean_std'
             _transform['action_norm_type'] = 'mean_std'
 
-# Evaluation bookkeeping: the deployment adapter (EEF -> joint) is applied by
-# scripts/eval_robocasa_manager.sh configs with "eef_action_space=True".
+# Evaluation: the policy consumes absolute EEF state and emits delta EEF, while
+# RoboCasa still takes absolute 29D joint targets. RobocasaEvalRunner converts
+# with fluxvla/utils/eef_eval_adapter.py (FK for the observation, DLS IK for the
+# action) when `eef_action_space` is set.
 _base_.eval.unnorm_key = _EEF_STAT_NAME
 _base_.eval.denormalize_action.norm_type = 'mean_std'
 _base_.eval.denormalize_action.delta_action_mask = None
+_base_.eval.eef_action_space = dict(enabled=True)
+# Eval-time state normalisation must match training (mean_std on the EEF stats,
+# not the joint recipe's quantile).
+for _eval_transform in _base_.eval.dataset.transforms:
+    if (isinstance(_eval_transform, dict)
+            and _eval_transform.get('type') == 'NormalizeStatesAndActions'):
+        _eval_transform['norm_type'] = 'mean_std'
+        _eval_transform['state_norm_type'] = 'mean_std'
+        _eval_transform['action_norm_type'] = 'mean_std'
 
 runner = dict(
     type='DDPTrainRunner',

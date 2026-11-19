@@ -113,6 +113,7 @@ class RobocasaEvalRunner(BaseEvalRunner):
                  model_build_dtype=None,
                  action_order: Optional[str] = None,
                  action_keys: Optional[Dict[str, List[int]]] = None,
+                 eef_action_space: Optional[Dict] = None,
                  grouped_norm_stats: bool = False,
                  norm_stats_group_names: Optional[List[str]] = None,
                  deterministic_env: bool = True,
@@ -345,6 +346,20 @@ class RobocasaEvalRunner(BaseEvalRunner):
                 self.vla.norm_stats = json.load(f)
 
         self._active_denorm = self.denormalize_action
+
+        # Optional deployment adapter for the unified EEF arms (TASK 2/5/6):
+        # the policy sees absolute EEF state and emits delta EEF, the env still
+        # takes absolute 29D joint targets.
+        self.eef_adapter = None
+        if eef_action_space:
+            eef_cfg = copy.deepcopy(dict(eef_action_space))
+            if eef_cfg.pop('enabled', True):
+                from fluxvla.utils.eef_eval_adapter import EEFActionAdapter
+
+                self.eef_adapter = EEFActionAdapter(**eef_cfg)
+                overwatch.info(
+                    '[eef] closed-loop adapter enabled: EEF delta -> 29D joint '
+                    'targets via DLS IK (camera-frame action space)')
 
     @staticmethod
     def _normalize_seed(seed: int) -> int:
@@ -951,7 +966,20 @@ class RobocasaEvalRunner(BaseEvalRunner):
                     # Build input dict for the dataset transform pipeline.
                     obs['task_description'] = task_desc
                     obs['is_new_episode'] = (t == 0)
-                    batch, _ = self.dataset(obs)
+                    joint_snapshot = None
+                    policy_obs = obs
+                    if self.eef_adapter is not None:
+                        # Plan from the camera-frame EEF state; keep the joint
+                        # snapshot so every action in this chunk is IK-ed
+                        # against the state the policy actually saw.
+                        from ...transforms.robocasa_transforms import (
+                            flatten_robocasa_state)
+                        joint_snapshot = flatten_robocasa_state(obs)
+                        eef_state = self.eef_adapter.state_from_joint(
+                            joint_snapshot)
+                        policy_obs = self.eef_adapter.obs_with_eef_state(
+                            obs, eef_state)
+                    batch, _ = self.dataset(policy_obs)
                     debug_info = getattr(self.dataset, 'last_debug', {})
                     if t == 0:
                         state_arr = (
@@ -1043,6 +1071,19 @@ class RobocasaEvalRunner(BaseEvalRunner):
                             # state snapshot used for this policy prediction.
                             denorm_input['state'] = raw_state
                         action_denormed = self._active_denorm(denorm_input)
+
+                        if self.eef_adapter is not None:
+                            # EEF delta (camera frame) -> absolute 29D joint
+                            # targets for this env step.
+                            action_denormed = self.eef_adapter.action_to_joint(
+                                action_denormed, joint_snapshot)
+                            if t == 0 and chunk_index == 0:
+                                overwatch.info(
+                                    '[eef] IK residual after first action: '
+                                    f'{self.eef_adapter.last_residual:.3e}')
+                                log_file.write(
+                                    '[eef] IK residual after first action: '
+                                    f'{self.eef_adapter.last_residual:.3e}\n')
 
                         if t == 0:
                             denorm_min = format(action_denormed.min(), '.6g')
