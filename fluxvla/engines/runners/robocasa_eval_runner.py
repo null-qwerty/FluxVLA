@@ -979,6 +979,41 @@ class RobocasaEvalRunner(BaseEvalRunner):
                             joint_snapshot)
                         policy_obs = self.eef_adapter.obs_with_eef_state(
                             obs, eef_state)
+                        # One-shot diagnostic (EEF_DEBUG_STATE=1): dump the raw
+                        # eval-side state next to the training statistics, so a
+                        # frame/convention mismatch is measurable instead of
+                        # guessed at from the discretized prompt tokens.
+                        if (t == 0 and os.environ.get('EEF_DEBUG_STATE')
+                                and not getattr(self, '_eef_debug_done',
+                                                False)):
+                            self._eef_debug_done = True
+                            np.set_printoptions(precision=4, suppress=True,
+                                                linewidth=200)
+                            overwatch.info(
+                                '[eef-debug] joint29=%s',
+                                np.asarray(joint_snapshot, dtype=float))
+                            overwatch.info(
+                                '[eef-debug] eef_state=%s',
+                                np.asarray(eef_state, dtype=float))
+                            try:
+                                stats = self.vla.norm_stats[self.unnorm_key][
+                                    'proprio']
+                                mean = np.asarray(stats['mean'], dtype=float)
+                                std = np.asarray(stats['std'], dtype=float)
+                                z = ((np.asarray(eef_state, dtype=float)
+                                      - mean) / np.maximum(std, 1e-6))
+                                order = np.argsort(-np.abs(z))[:8]
+                                for index in order:
+                                    overwatch.info(
+                                        '[eef-debug] dim %d z=%.2f '
+                                        'raw=%.4f mean=%.4f std=%.5f',
+                                        int(index), float(z[index]),
+                                        float(eef_state[index]),
+                                        float(mean[index]), float(std[index]))
+                            except Exception as error:  # noqa: BLE001
+                                overwatch.info(
+                                    '[eef-debug] statistics unavailable: %s',
+                                    error)
                     batch, _ = self.dataset(policy_obs)
                     debug_info = getattr(self.dataset, 'last_debug', {})
                     if t == 0:
